@@ -23,6 +23,7 @@ app.add_middleware(
 UNSILOED_API_KEY = os.getenv("UNSILOED_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:password@localhost:5432/hospitality_db")
 CRUSTDATA_TOKEN = os.getenv("CRUSTDATA_API_KEY")
+print(CRUSTDATA_TOKEN)
 
 REFERRAL_SCHEMA = {
     "type": "object",
@@ -33,6 +34,44 @@ REFERRAL_SCHEMA = {
     },
     "required": ["patient_name", "clinical_reason", "insurance_payer"]
 }
+
+async def fetch_crustdata_enrichment(doctor_name: str, token: str):
+    """Fetch professional clinic metrics from Crustdata Company Search API."""
+    if not token:
+        return random.randint(5, 55), "https://fallback-clinic.org"
+        
+    api_url = "https://api.crustdata.com/screener/companydb/search"
+    payload = {
+        "filters": {
+            "filter_type": "company_name",
+            "type": "(.)",
+            "value": doctor_name
+        },
+        "limit": 1
+    }
+    headers = {
+        "Authorization": f"Token {token}",
+        "Content-Type": "application/json"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(api_url, json=payload, headers=headers, timeout=10.0)
+            if resp.status_code == 200:
+                result = resp.json()
+                companies = result.get("companies", [])
+                if companies:
+                    return (
+                        companies[0].get("linkedin_headcount", 8), 
+                        companies[0].get("company_website", "https://private-practice.com")
+                    )
+                # Success but no companies found
+                print(companies)
+                return 8, "https://private-practice.com"
+        except Exception as e:
+            print(f"Crustdata Enrichment Error: {e}")
+    print("Crustdata API error or timeout, returning fallback values.")
+    return 10, "https://default-clinic.com"
 
 async def poll_unsiloed(job_id: str):
     headers = {"api-key": UNSILOED_API_KEY}
@@ -93,35 +132,40 @@ async def ingest_data(
 
 @app.post("/api/etl/sync")
 async def run_etl_sync():
-    """Joins NYC Hospital data + NPI Registry and enriches via Crustdata."""
+    """Joins NYC Hospital data + NPI Registry and enriches via Crustdata API."""
     async with httpx.AsyncClient() as client:
         # 1. Fetch NYC Hospital Data
         nyc_resp = await client.get("https://data.cityofnewyork.us/resource/ji82-xba5.json?$query=SELECT%20*%20WHERE%20factype%20LIKE%20%27%25HOSPITAL%25%27%20LIMIT%2050")
         nyc_facilities = nyc_resp.json()
 
         # 2. Fetch NPI Registry
-        npi_resp = await client.get("https://npiregistry.cms.hhs.gov/api/?version=2.1&city=new+york&state=ny&taxonomy_description=cardiovascular+disease&limit=50")
+        npi_resp = await client.get("https://npiregistry.cms.hhs.gov/api/?version=2.1&city=new+york&state=ny&taxonomy_description=cardiovascular+disease&limit=20")
         npi_results = npi_resp.json().get("results", [])
 
     joined_data = []
     messy_insurances = ["Fidelis Care NY Medicaid Plan!!!", "Aetna Choice POS II (v.2024)", "Blue Cross Blue Shield Empire - PPO High"]
 
     for npi in npi_results:
-        full_name = npi.get("basic", {}).get("organization_name") or f"Dr. {npi['basic'].get('first_name')} {npi['basic'].get('last_name')}"
-        address = npi["addresses"][0].get("address_1", "")
+        full_name = npi.get("basic", {}).get("organization_name") or f"Dr. {npi['basic'].get('first_name', '')} {npi['basic'].get('last_name', '')}"
+        address = npi["addresses"][0].get("address_1", "") if npi.get("addresses") else ""
+        city = npi["addresses"][0].get("city", "New York") if npi.get("addresses") else "New York"
         
         # Simple Join Logic
         affiliated = next((f for f in nyc_facilities if address.upper() in f.get("address", "").upper()), None)
         
-        # Mock Crustdata Enrichment
-        staff_count = random.randint(10, 100)
-        website = "https://hospital-network.org"
+        # Actual Crustdata Enrichment
+        staff_count, website = await fetch_crustdata_enrichment(full_name, CRUSTDATA_TOKEN)
+        
+        if staff_count not in [8, 10, 15] and "fallback" not in website and "default" not in website:
+            print(f"🎯 CRUSTDATA MATCH: {full_name} -> Staff: {staff_count}, Web: {website}")
+        else:
+            print(f"⚠️  Using Fallback for: {full_name}")
 
         provider = {
             "npi": npi["number"],
             "full_name": full_name,
             "specialty": "Cardiology",
-            "address": f"{address}, {npi['addresses'][0].get('city')}",
+            "address": f"{address}, {city}",
             "wait_time_days": random.randint(1, 30),
             "years_experience": random.randint(5, 25),
             "clinic_size": staff_count,
@@ -132,6 +176,11 @@ async def run_etl_sync():
         }
         joined_data.append(provider)
 
+    # Save local copy for manual verification
+    with open("data/debug_enriched_providers.json", "w") as f:
+        json.dump(joined_data, f, indent=2)
+    print(f"💾 Saved {len(joined_data)} providers to backend/etl/data/debug_enriched_providers.json")
+
     # Bulk Upsert to Supabase
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
@@ -139,7 +188,10 @@ async def run_etl_sync():
         cur.execute("""
             INSERT INTO providers (npi, full_name, specialty, address, wait_time_days, years_experience, clinic_size, official_website, data_discrepancy_flag, accepted_payers)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (npi) DO UPDATE SET clinic_size = EXCLUDED.clinic_size, accepted_payers = EXCLUDED.accepted_payers
+            ON CONFLICT (npi) DO UPDATE SET 
+                clinic_size = EXCLUDED.clinic_size, 
+                official_website = EXCLUDED.official_website,
+                accepted_payers = EXCLUDED.accepted_payers
         """, (p["npi"], p["full_name"], p["specialty"], p["address"], p["wait_time_days"], p["years_experience"], p["clinic_size"], p["official_website"], p["data_discrepancy_flag"], p["accepted_payers"]))
     
     conn.commit()
