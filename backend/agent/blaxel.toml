@@ -1,6 +1,6 @@
 [agent]
-name = "ethical-matcher"
-description = "Evaluates healthcare providers using the Four-Box Medical Ethics model"
+name = "ethical-matcher-agent"
+description = "Multi-role AI: Ethical Matcher, Provider Handoff, and Insurance Auto-Adjudicator"
 
 [build]
 command = "go build -o server main.go"

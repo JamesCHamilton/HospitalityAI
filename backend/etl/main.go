@@ -1,4 +1,3 @@
-// etl/main.go
 package main
 
 import (
@@ -42,18 +41,19 @@ type CrustdataResponse struct {
 }
 
 type EnrichedProvider struct {
-	NPI               int      `json:"npi"`
-	FullName          string   `json:"full_name"`
-	Specialty         string   `json:"specialty"`
-	Address           string   `json:"address"`
-	WaitTimeDays      int      `json:"wait_time_days"`
-	AcceptedInsurance []string `json:"accepted_insurance"`
-	YearsExperience   int      `json:"years_experience"`
-	ClinicSize        string   `json:"clinic_size"`
+	NPI                 int      `json:"npi"`
+	FullName            string   `json:"full_name"`
+	Specialty           string   `json:"specialty"`
+	Address             string   `json:"address"`
+	WaitTimeDays        int      `json:"wait_time_days"`
+	AcceptedInsurance   []string `json:"accepted_insurance"`
+	YearsExperience     int      `json:"years_experience"`
+	ClinicSize          string   `json:"clinic_size"`
+	DataDiscrepancyFlag bool     `json:"data_discrepancy_flag"` // Flags NPI vs Crustdata collisions
+	DiscrepancyNote     string   `json:"discrepancy_note"`
 }
 
 func fetchCrustdata(name, token string) CrustdataResponse {
-	// Fallback mock if API key isn't set or request fails
 	mockData := CrustdataResponse{ExperienceYears: rand.Intn(25) + 2, ClinicSize: "11-50"}
 	if token == "" {
 		return mockData
@@ -74,8 +74,7 @@ func fetchCrustdata(name, token string) CrustdataResponse {
 	defer resp.Body.Close()
 
 	var data CrustdataResponse
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &data)
+	json.NewDecoder(resp.Body).Decode(&data)
 	return data
 }
 
@@ -83,7 +82,7 @@ func main() {
 	crustdataToken := os.Getenv("CRUSTDATA_API_KEY")
 	unsiloedToken := os.Getenv("UNSILOED_API_KEY")
 
-	fmt.Println("1. Fetching NPI Registry Data...")
+	fmt.Println("1. Fetching Federal NPI Registry Data...")
 	resp, err := http.Get("https://npiregistry.cms.hhs.gov/api/?version=2.1&city=new+york&state=ny&taxonomy_description=cardiovascular+disease&limit=15")
 	if err != nil {
 		log.Fatalf("NPI API failed: %v", err)
@@ -91,14 +90,13 @@ func main() {
 	defer resp.Body.Close()
 
 	var npiData NPIResponse
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &npiData)
+	json.NewDecoder(resp.Body).Decode(&npiData)
 
 	var providers []EnrichedProvider
 	insurances := []string{"Medicaid", "Medicare", "BlueCross", "Aetna", "Fidelis Care"}
 	rand.Seed(time.Now().UnixNano())
 
-	fmt.Println("2. Enriching with Crustdata...")
+	fmt.Println("2. Enriching with Crustdata API...")
 	for _, doc := range npiData.Results {
 		if doc.Basic.FirstName == "" {
 			continue
@@ -124,16 +122,24 @@ func main() {
 		crustMetrics := fetchCrustdata(fullName, crustdataToken)
 		rand.Shuffle(len(insurances), func(i, j int) { insurances[i], insurances[j] = insurances[j], insurances[i] })
 
+		// Edge Case: Simulate a data silo discrepancy where professional data doesn't match federal data
+		hasDiscrepancy := rand.Float32() < 0.20 // 20% chance of collision
+		discrepancyNote := ""
+		if hasDiscrepancy {
+			discrepancyNote = "Warning: Federal NPI registry address differs from Crustdata professional scrape. Verify clinic location manually."
+		}
+
 		providers = append(providers, EnrichedProvider{
 			NPI: doc.Number, FullName: strings.ToUpper(fullName), Specialty: specialty,
 			Address: address, WaitTimeDays: rand.Intn(45) + 1, AcceptedInsurance: insurances[:3],
 			YearsExperience: crustMetrics.ExperienceYears, ClinicSize: crustMetrics.ClinicSize,
+			DataDiscrepancyFlag: hasDiscrepancy, DiscrepancyNote: discrepancyNote,
 		})
 	}
 
-	fmt.Println("3. Standardizing via Unsiloed AI...")
+	fmt.Println("3. Standardizing payload via Unsiloed AI...")
 	rawJSON, _ := json.Marshal(map[string]interface{}{
-		"data": providers, "instructions": "Standardize provider data perfectly.",
+		"data": providers, "instructions": "Standardize provider data perfectly into JSON array.",
 	})
 
 	req, _ := http.NewRequest("POST", "https://api.unsiloed.ai/v1/process", bytes.NewBuffer(rawJSON))
@@ -143,13 +149,14 @@ func main() {
 	client := &http.Client{Timeout: 10 * time.Second}
 	unsiloedResp, err := client.Do(req)
 
-	finalData := rawJSON // Default to our raw data if Unsiloed isn't hooked up yet
+	finalData := rawJSON // Default to raw if Unsiloed fails or token is missing
 	if err == nil && unsiloedResp.StatusCode == 200 {
 		defer unsiloedResp.Body.Close()
 		finalData, _ = io.ReadAll(unsiloedResp.Body)
 	}
 
-	// Save to a file for the Blaxel Agent to use
+	// Create agent directory if it doesn't exist
+	os.MkdirAll("../agent", os.ModePerm)
 	os.WriteFile("../agent/clean_providers.json", finalData, 0644)
-	fmt.Println("Data pipeline complete! Saved to clean_providers.json")
+	fmt.Println("ETL Pipeline Complete! Data secured in ../agent/clean_providers.json")
 }
