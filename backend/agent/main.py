@@ -86,12 +86,26 @@ async def handle_handoff(req: HandoffRequest):
                     (req.patientName, req.patientContext, req.patientPlanId.lower()))
         patient_id = cur.fetchone()['id']
 
-    # 3. AI Adjudication Logic
-    safety = "Warning: Data Inconsistent." if provider['data_discrepancy_flag'] else ""
-    system_prompt = f"""Rules: 1. Step Therapy 2. Network Adequacy. {safety}
-    Return JSON with: priority_score, confidence_score, decision_reason, fhir_blob, efax_payload."""
+    # 3. AI Adjudication & Rules Engine
+    safety_context = "Warning: Data Inconsistent - Prioritize Manual Review." if provider['data_discrepancy_flag'] else "Data Verified."
     
-    prompt = f"Patient: {req.patientContext}, Plan: {req.patientPlanId}, Provider Payers: {provider['accepted_payers']}"
+    system_prompt = f"""You are a Senior Insurance Adjudicator Reasoning Engine. 
+    Safety Status: {safety_context}
+    
+    Adjudication Criteria:
+    1. Network Adequacy: Verify if the provider accepts the patient's plan ({req.patientPlanId}).
+    2. Step Therapy: Check if the clinical context ({req.patientContext}) suggests a procedure that requires previous conservative steps (e.g., PT before MRI/Surgery).
+    3. Medical Necessity: Evaluate if the specialist match is medically appropriate for the reported symptoms.
+    4. Urgency Score: Assign a priority_score (0-100) based on clinical risk.
+
+    Decision Logic:
+    - AUTO-APPROVED: Confidence > 85% AND In-Network AND No Step Therapy violations.
+    - DENIED: Clear violation of plan rules or medically inappropriate.
+    - MANUAL_REVIEW: Confidence < 85% OR Ambiguous clinical data OR Data Inconsistency flag is True.
+
+    Return JSON with: priority_score, confidence_score, status (AUTO-APPROVED, DENIED, MANUAL_REVIEW), decision_reason, fhir_blob, efax_payload."""
+    
+    prompt = f"Patient: {req.patientName}, Plan: {req.patientPlanId}, Context: {req.patientContext}, Provider: {provider['full_name']}, Accepted Payers: {provider['accepted_payers']}"
     
     response = client.chat.completions.create(
         model="gpt-4o",
@@ -103,9 +117,15 @@ async def handle_handoff(req: HandoffRequest):
     )
     
     auth_data = json.loads(response.choices[0].message.content)
-    status = "AUTO-APPROVED" if auth_data['confidence_score'] > 85 else "MANUAL_REVIEW"
+    # The AI now determines the status based on the rules provided in the system prompt
+    status = auth_data.get('status', 'MANUAL_REVIEW')
     
-    # 4. Save Authorization
+    # Overwrite status if safety flag is high but AI missed it
+    if provider['data_discrepancy_flag'] and status == 'AUTO-APPROVED':
+        status = 'MANUAL_REVIEW'
+        auth_data['decision_reason'] += " (Flagged for manual review due to data discrepancy)"
+
+    # 4. Save Authorization (The Claim)
     cur.execute("""
         INSERT INTO authorizations (patient_id, provider_id, priority_score, status, fhir_blob, efax_payload, decision_reason, confidence_score)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
