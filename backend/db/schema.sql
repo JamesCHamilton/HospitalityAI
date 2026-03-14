@@ -16,9 +16,9 @@ CREATE TABLE IF NOT EXISTS providers (
     address TEXT,
     wait_time_days INTEGER,
     years_experience INTEGER,
-    clinic_size INTEGER, -- Enriched by Crustdata
-    official_website TEXT, -- Enriched by Crustdata
-    accepted_payers JSONB, -- Cleaned by Unsiloed
+    clinic_size INTEGER,
+    official_website TEXT,
+    accepted_payers JSONB,
     data_discrepancy_flag BOOLEAN DEFAULT FALSE
 );
 
