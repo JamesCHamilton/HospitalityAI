@@ -1,12 +1,14 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- 1. Insurance Plans Reference
 CREATE TABLE IF NOT EXISTS insurance (
-    id TEXT PRIMARY KEY, -- name.lower()
+    id TEXT PRIMARY KEY, -- e.g., 'fid_med_ny'
     name TEXT NOT NULL,
     carrier TEXT,
     plan_name TEXT
 );
 
+-- 2. Enriched Providers (The Source of Truth)
 CREATE TABLE IF NOT EXISTS providers (
     npi INTEGER PRIMARY KEY,
     full_name TEXT NOT NULL,
@@ -14,12 +16,13 @@ CREATE TABLE IF NOT EXISTS providers (
     address TEXT,
     wait_time_days INTEGER,
     years_experience INTEGER,
-    clinic_size INTEGER,
-    official_website TEXT,
-    accepted_payers JSONB,
+    clinic_size INTEGER, -- Enriched by Crustdata
+    official_website TEXT, -- Enriched by Crustdata
+    accepted_payers JSONB, -- Cleaned by Unsiloed
     data_discrepancy_flag BOOLEAN DEFAULT FALSE
 );
 
+-- 3. Patient Records
 CREATE TABLE IF NOT EXISTS patients (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
@@ -27,13 +30,7 @@ CREATE TABLE IF NOT EXISTS patients (
     insurance_id TEXT REFERENCES insurance(id)
 );
 
--- Many-to-many relationship between providers and insurance plans (for internal logic)
-CREATE TABLE IF NOT EXISTS provider_insurance (
-    provider_npi INTEGER REFERENCES providers(npi),
-    insurance_id TEXT REFERENCES insurance(id),
-    PRIMARY KEY (provider_npi, insurance_id)
-);
-
+-- 4. AI Adjudication Queue
 CREATE TABLE IF NOT EXISTS authorizations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     patient_id UUID REFERENCES patients(id),
@@ -47,5 +44,5 @@ CREATE TABLE IF NOT EXISTS authorizations (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Enable Realtime for the authorizations table
+-- Enable Supabase Realtime for the dashboard
 ALTER PUBLICATION supabase_realtime ADD TABLE authorizations;
