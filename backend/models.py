@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, Table, JSON
+from sqlalchemy import Column, DateTime, String, Integer, Boolean, ForeignKey, Table, JSON
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -69,7 +69,7 @@ class Provider(Base):
     clinic_size = Column(Integer)
     official_website = Column(String)
     data_discrepancy_flag = Column(Boolean, default=False)
-
+    import_id = Column(String, index=True, unique=True)  # For deduplication when scraping/importing
     # Relationships
     insurances = relationship(
         "Insurance",
@@ -95,27 +95,38 @@ class Patient(Base):
     claims = relationship("Claim", back_populates="patient")
 
 
+from sqlalchemy.sql import func
+
 class Claim(Base):
     __tablename__ = "claims"
     claim_id = Column(String, primary_key=True)
     patient_id = Column(String, ForeignKey("patients.id"))
-    # provider_npi = Column(String, ForeignKey("providers.npi"))
+    provider_npi = Column(String, ForeignKey("providers.npi"))  # Include provider reference
     description = Column(String)
     diagnosis_codes = Column(JSONB)  # List of ICD-10 or other codes
-
+    status = Column(String)  # e.g., "approved", "denied", "in progress", etc.
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    
     # Relationships
     patient = relationship("Patient", back_populates="claims")
-    claim_queue = relationship("ClaimQueue", back_populates="claim", uselist=False)
-
-
-class ClaimQueue(Base):
-    __tablename__ = "claim_queue"
-    id = Column(String, primary_key=True)
-    claim_id = Column(String, ForeignKey("claims.claim_id"))
-    provider_id = Column(String, ForeignKey("providers.npi"))
+    provider = relationship("Provider")
+    # claim_queue = relationship("ClaimQueue", back_populates="claim", uselist=False)
     priority_score = Column(Integer)
-    status = Column(String)  # e.g., "approved", "denied", "in progress", etc.
 
-    # Relationships
-    claim = relationship("Claim", back_populates="claim_queue")
-    provider = relationship("Provider", backref="claim_queues")
+
+
+# class ClaimQueue(Base):
+#     __tablename__ = "claim_queue"
+#     id = Column(String, primary_key=True)
+#     claim_id = Column(String, ForeignKey("claims.claim_id"))
+#     provider_id = Column(String, ForeignKey("providers.npi"))
+#     priority_score = Column(Integer)
+
+#     # Relationships
+#     claim = relationship("Claim", back_populates="claim_queue")
+#     provider = relationship("Provider", backref="claim_queues")
