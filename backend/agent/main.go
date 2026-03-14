@@ -2,220 +2,227 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"sort"
-	"sync"
-	"time"
-)
+	"strings"
 
-// --- Structs for Incoming Requests ---
-type MatchRequest struct {
-	PatientContext string `json:"patientContext"`
-}
+	_ "github.com/lib/pq"
+)
 
 type HandoffRequest struct {
-	PatientContext    string `json:"patientContext"`
-	PatientName       string `json:"patientName"`
-	ProviderNPI       int    `json:"providerNpi"`
-	ProviderName      string `json:"providerName"`
-	ProviderInNetwork bool   `json:"providerInNetwork"`
+	PatientContext string `json:"patientContext"`
+	PatientName    string `json:"patientName"`
+	PatientPlanID  string `json:"patientPlanId"`
+	ProviderNPI    int    `json:"providerNpi"`
 }
 
-// --- Structs for the Priority Queue ---
 type Claim struct {
-	ClaimID         string `json:"claim_id"`
-	PatientName     string `json:"patient_name"`
-	ProviderName    string `json:"provider_name"`
-	PriorityScore   int    `json:"priority_score"`
-	ConfidenceScore int    `json:"confidence_score"`
-	Status          string `json:"status"` // "AUTO-APPROVED", "AUTO-DENIED", "MANUAL_REVIEW"
-	DecisionReason  string `json:"decision_reason"`
-	ClinicalBrief   string `json:"clinical_brief"`
-	FHIRPayload     string `json:"fhir_payload"`
-	EFaxPayload     string `json:"efax_payload"`
+	ClaimID        string `json:"claim_id"`
+	PatientName    string `json:"patient_name"`
+	Status         string `json:"status"`
+	PriorityScore  int    `json:"priority_score"`
+	DecisionReason string `json:"decision_reason"`
+	FHIRPayload    string `json:"fhir_payload"`
+	EFaxPayload    string `json:"efax_payload"`
 }
 
-var (
-	claimQueue []Claim
-	queueMutex sync.Mutex
-)
+type Provider struct {
+	NPI                 int      `json:"npi"`
+	FullName            string   `json:"full_name"`
+	Specialty           string   `json:"specialty"`
+	Address             string   `json:"address"`
+	WaitTimeDays        int      `json:"wait_time_days"`
+	AcceptedPlans       []string `json:"accepted_plans"`
+	YearsExperience     int      `json:"years_experience"`
+	ClinicSize          int      `json:"clinic_staff_count"`
+	OfficialWebsite     string   `json:"official_website"`
+	DataDiscrepancyFlag bool     `json:"data_discrepancy_flag"`
+}
 
-// --- Endpoint 1: Ethical Patient Matcher ---
+var db *sql.DB
+
 func handleMatch(w http.ResponseWriter, r *http.Request) {
-	setCorsHeaders(w, r)
+	setupCORS(&w, r)
 	if r.Method == "OPTIONS" {
 		return
 	}
 
-	var reqData MatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
-		http.Error(w, "Invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	providersData, err := os.ReadFile("clean_providers.json")
+	rows, err := db.Query(`
+		SELECT p.npi, p.full_name, p.specialty, p.address, p.wait_time_days, p.years_experience, p.clinic_size, p.official_website, p.data_discrepancy_flag,
+		       COALESCE(array_agg(i.id), '{}') as accepted_plans
+		FROM provider p
+		LEFT JOIN provider_insurance pi ON p.npi = pi.provider_npi
+		LEFT JOIN insurance i ON pi.insurance_id = i.id
+		GROUP BY p.npi`)
 	if err != nil {
-		http.Error(w, "Provider data missing. Run ETL first.", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer rows.Close()
 
-	systemPrompt := `You are an AI Clinical Triage Agent operating within the Four-Box Medical Ethics Model. 
-Evaluate the specialists and return a strict JSON object with a 'matches' array containing the top 3 optimal specialists.
-Each match MUST have:
-1. "npi" (number)
-2. "match_score" (number 0-100)
-3. "medical_indications_justification" (string)
-4. "justice_and_context_justification" (string)
-5. "provider_name" (string)`
-
-	promptContent := fmt.Sprintf("Patient Context: %s\n\nProviders: %s", reqData.PatientContext, string(providersData))
-
-	llmResponse, err := callLLM(systemPrompt, promptContent)
-	if err != nil {
-		http.Error(w, "AI reasoning failed", http.StatusInternalServerError)
-		return
+	var providers []Provider
+	for rows.Next() {
+		var p Provider
+		var plans []string
+		if err := rows.Scan(&p.NPI, &p.FullName, &p.Specialty, &p.Address, &p.WaitTimeDays, &p.YearsExperience, &p.ClinicSize, &p.OfficialWebsite, &p.DataDiscrepancyFlag, (*pq_StringArray)(&plans)); err != nil {
+			log.Printf("Scan error: %v", err)
+			continue
+		}
+		p.AcceptedPlans = plans
+		providers = append(providers, p)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(llmResponse)
+	providersJSON, _ := json.Marshal(providers)
+	var reqBody map[string]string
+	json.NewDecoder(r.Body).Decode(&reqBody)
+
+	prompt := fmt.Sprintf("Analyze these providers: %s against patient: %s. Return top 3 matches in JSON.", string(providersJSON), reqBody["patientContext"])
+	resp, _ := callLLM(prompt, true)
+	w.Write(resp)
 }
 
-// --- Endpoint 2: Zero-Touch Handoff & Auto-Adjudication ---
-func handleHandoffAndClaim(w http.ResponseWriter, r *http.Request) {
-	setCorsHeaders(w, r)
-	if r.Method == "OPTIONS" {
-		return
+// Helper for scanning postgres arrays
+type pq_StringArray []string
+
+func (a *pq_StringArray) Scan(src interface{}) error {
+	if src == nil {
+		*a = []string{}
+		return nil
 	}
-
-	var reqData HandoffRequest
-	json.NewDecoder(r.Body).Decode(&reqData)
-
-	systemPrompt := `You are a dual-role AI: A Medical Scribe and a strict Insurance Adjudicator.
-TASK 1: GENERATE INTEGRATION ARTIFACTS
-1. "clinical_brief": 3 sentences summarizing Chief Complaint and History.
-2. "fhir_payload": Strict JSON string for an HL7 ServiceRequest.
-3. "efax_payload": Plain-text memo formatted like a traditional Fax cover sheet (Legacy Fallback).
-
-TASK 2: AUTO-ADJUDICATE
-AUTO-DENY FACTORS: Step Therapy Violation (requests advanced imaging/surgery without failing conservative therapy), or Out-of-Network Elective.
-AUTO-APPROVE FACTORS (Must meet ALL): Provider is In-Network AND Specialty matches AND condition is an acute escalation.
-MANUAL REVIEW: Ambiguous symptoms, or Network Adequacy Exception (Out-of-network requested because no in-network accessible).
-
-TASK 3: SCORING
-"priority_score" (0-100): Clinical urgency (100 = immediate risk).
-"confidence_score" (0-100): Confidence in auto-adjudication. Penalize messy/vague input. ANY score < 85 MUST force status to "MANUAL_REVIEW".
-
-Output a STRICT JSON object with exactly these keys: "priority_score", "confidence_score", "status", "decision_reason", "clinical_brief", "fhir_payload", "efax_payload".`
-
-	promptContent := fmt.Sprintf("Patient Name: %s\nPatient Context: %s\nMatched Provider: %s (NPI: %d)\nIs Provider In-Network: %t",
-		reqData.PatientName, reqData.PatientContext, reqData.ProviderName, reqData.ProviderNPI, reqData.ProviderInNetwork)
-
-	llmResponse, err := callLLM(systemPrompt, promptContent)
-	if err != nil {
-		http.Error(w, "AI reasoning failed", http.StatusInternalServerError)
-		return
+	s := src.(string)
+	s = strings.Trim(s, "{}")
+	if s == "" {
+		*a = []string{}
+		return nil
 	}
-
-	var adjudicatedClaim Claim
-	json.Unmarshal(llmResponse, &adjudicatedClaim)
-
-	// HARDCODED SAFETY CONSTRAINT: Defense in Depth against LLM Hallucinations
-	if adjudicatedClaim.ConfidenceScore < 85 && adjudicatedClaim.Status != "AUTO-DENIED" {
-		adjudicatedClaim.Status = "MANUAL_REVIEW"
-		adjudicatedClaim.DecisionReason = "Forced to Manual Review: AI Confidence Score too low for safe auto-approval."
-	}
-
-	adjudicatedClaim.ClaimID = fmt.Sprintf("CLM-%d", time.Now().Unix())
-	adjudicatedClaim.PatientName = reqData.PatientName
-	adjudicatedClaim.ProviderName = reqData.ProviderName
-
-	queueMutex.Lock()
-	claimQueue = append(claimQueue, adjudicatedClaim)
-	sort.Slice(claimQueue, func(i, j int) bool {
-		return claimQueue[i].PriorityScore > claimQueue[j].PriorityScore
-	})
-	queueMutex.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(adjudicatedClaim)
+	*a = strings.Split(s, ",")
+	return nil
 }
 
-// --- Endpoint 3: Insurance Priority Queue ---
+func handleHandoff(w http.ResponseWriter, r *http.Request) {
+	setupCORS(&w, r)
+	var req HandoffRequest
+	json.NewDecoder(r.Body).Decode(&req)
+
+	// 1. Ensure Patient exists
+	var patientID string
+	err := db.QueryRow(`
+		INSERT INTO patient (name, context, insurance_id)
+		VALUES ($1, $2, $3)
+		RETURNING id`,
+		req.PatientName, req.PatientContext, strings.ToLower(req.PatientPlanID)).Scan(&patientID)
+	if err != nil {
+		// Fallback if insurance_id doesn't exist yet
+		err = db.QueryRow(`
+			INSERT INTO patient (name, context)
+			VALUES ($1, $2)
+			RETURNING id`,
+			req.PatientName, req.PatientContext).Scan(&patientID)
+	}
+
+	systemPrompt := `You are an Insurance Adjudicator. 
+	1. Generate a FHIR JSON payload.
+	2. Generate a plain-text e-Fax fallback.
+	3. AUTO-APPROVE if condition is acute and provider is in-network. 
+	4. AUTO-DENY if it violates Step Therapy (e.g. Surgery before PT).
+	Return JSON with: priority_score, status, decision_reason, fhir_payload, efax_payload.`
+
+	prompt := fmt.Sprintf("Patient: %s, Plan: %s, Provider NPI: %d", req.PatientContext, req.PatientPlanID, req.ProviderNPI)
+	llmResp, _ := callLLM(systemPrompt+prompt, false)
+
+	var c Claim
+	json.Unmarshal(llmResp, &c)
+	c.ClaimID = fmt.Sprintf("CLM-%d-%s", req.ProviderNPI, patientID[:8])
+	c.PatientName = req.PatientName
+
+	// 2. Save Claim to DB
+	_, err = db.Exec(`
+		INSERT INTO claim (claim_id, patient_id, status, priority_score, decision_reason, fhir_payload, efax_payload)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		c.ClaimID, patientID, c.Status, c.PriorityScore, c.DecisionReason, c.FHIRPayload, c.EFaxPayload)
+	if err != nil {
+		log.Printf("Error saving claim: %v", err)
+	}
+
+	w.Write(llmResp)
+}
+
 func getQueue(w http.ResponseWriter, r *http.Request) {
-	setCorsHeaders(w, r)
-	if r.Method == "OPTIONS" {
+	setupCORS(&w, r)
+	rows, err := db.Query(`
+		SELECT c.claim_id, p.name as patient_name, c.status, c.priority_score, c.decision_reason, c.fhir_payload, c.efax_payload
+		FROM claim c
+		JOIN patient p ON c.patient_id = p.id
+		ORDER BY c.priority_score DESC`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer rows.Close()
 
-	queueMutex.Lock()
-	defer queueMutex.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(claimQueue)
+	var claims []Claim
+	for rows.Next() {
+		var c Claim
+		if err := rows.Scan(&c.ClaimID, &c.PatientName, &c.Status, &c.PriorityScore, &c.DecisionReason, &c.FHIRPayload, &c.EFaxPayload); err != nil {
+			continue
+		}
+		claims = append(claims, c)
+	}
+	json.NewEncoder(w).Encode(claims)
 }
 
-// --- Helper: LLM Integration ---
-func callLLM(systemPrompt, userPrompt string) ([]byte, error) {
+func callLLM(prompt string, isMatch bool) ([]byte, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
+	url := "https://api.openai.com/v1/chat/completions"
+
 	payload := map[string]interface{}{
 		"model":           "gpt-4o",
+		"messages":        []map[string]string{{"role": "user", "content": prompt}},
 		"response_format": map[string]string{"type": "json_object"},
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
 	}
-	jsonPayload, _ := json.Marshal(payload)
-
-	req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonPayload))
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
+	resp, _ := client.Do(req)
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	var openAIResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+	var result struct {
+		Choices []struct{ Message struct{ Content string } }
 	}
-	json.Unmarshal(body, &openAIResp)
-
-	if len(openAIResp.Choices) == 0 {
-		return nil, fmt.Errorf("empty response")
-	}
-	return []byte(openAIResp.Choices[0].Message.Content), nil
+	resBody, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(resBody, &result)
+	return []byte(result.Choices[0].Message.Content), nil
 }
 
-// --- Helper: CORS ---
-func setCorsHeaders(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+func setupCORS(w *http.ResponseWriter, r *http.Request) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
+	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://user:password@localhost:5432/hospitality_db?sslmode=disable"
 	}
 
-	http.HandleFunc("/api/match", handleMatch)
-	http.HandleFunc("/api/handoff", handleHandoffAndClaim)
-	http.HandleFunc("/api/queue", getQueue)
+	var err error
+	db, err = sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 
-	fmt.Printf("Blaxel Adjudication Agent running on port %s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	http.HandleFunc("/api/match", handleMatch)
+	http.HandleFunc("/api/handoff", handleHandoff)
+	http.HandleFunc("/api/queue", getQueue)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }

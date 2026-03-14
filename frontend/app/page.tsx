@@ -6,7 +6,7 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-white">
       {/* Hero Section */}
-      <header className="py-20 px-4 text-center bg-gradient-to-b from-blue-50 to-white">
+      <header className="py-20 px-4 text-center bg-linear-to-b from-blue-50 to-white">
         <div className="max-w-4xl mx-auto">
           <div className="flex justify-center mb-6">
             <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200">
