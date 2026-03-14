@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS providers (
 -- 3. Patient Records
 CREATE TABLE IF NOT EXISTS patients (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name TEXT NOT NULL,
+    firstName TEXT NOT NULL,
+    lastName TEXT NOT NULL,
     clinical_history TEXT,
     insurance_id TEXT REFERENCES insurance(id)
 );
