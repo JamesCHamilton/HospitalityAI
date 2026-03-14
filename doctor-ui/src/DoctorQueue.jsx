@@ -1,3 +1,4 @@
+import { motion, AnimatePresence } from "framer-motion";
 import React, { useState } from "react";
 
 export default function DoctorQueue({ doctors }) {
@@ -7,34 +8,101 @@ export default function DoctorQueue({ doctors }) {
 
   const handleYes = (doctorId) => {
     setYesses(prev => [...prev, doctorId]);
-    setQueue(prev => prev.filter(d => d.id !== doctorId));
+    removeDoctor(doctorId);
   };
 
   const handleNo = (doctorId) => {
+    removeDoctor(doctorId);
+  };
+
+  const removeDoctor = (doctorId) => {
     setQueue(prev => prev.filter(d => d.id !== doctorId));
   };
 
   return (
-    <div style={{height:"500px", overflowY:"scroll"}}>
+    <div style={styles.container}>
 
-      {queue.map(doc => (
+      <AnimatePresence>
 
-        <div key={doc.id} style={{
-          border:"1px solid gray",
-          padding:"15px",
-          margin:"10px"
-        }}>
+        {queue.map((doc) => (
 
-          <div>Doctor ID: {doc.id}</div>
-          <div>Priority: {doc.priority}</div>
+          <motion.div
+            key={doc.id}
 
-          <button onClick={()=>handleYes(doc.id)}>Yes</button>
-          <button onClick={()=>handleNo(doc.id)}>No</button>
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, x: -100 }}
 
-        </div>
+            transition={{ duration: 0.3 }}
 
-      ))}
+            style={styles.card}
+          >
+
+            <div><b>Doctor ID:</b> {doc.id}</div>
+            <div><b>Priority:</b> {doc.priority}</div>
+
+            <div style={styles.buttons}>
+              <button
+                style={styles.yes}
+                onClick={() => handleYes(doc.id)}
+              >
+                Yes
+              </button>
+
+              <button
+                style={styles.no}
+                onClick={() => handleNo(doc.id)}
+              >
+                No
+              </button>
+            </div>
+
+          </motion.div>
+
+        ))}
+
+      </AnimatePresence>
 
     </div>
   );
 }
+
+const styles = {
+
+  container: {
+    height: "500px",
+    width: "350px",
+    overflowY: "scroll",
+    border: "1px solid #ccc",
+    padding: "10px"
+  },
+
+  card: {
+    border: "1px solid #aaa",
+    borderRadius: "10px",
+    padding: "15px",
+    marginBottom: "10px",
+    backgroundColor: "#f9f9f9"
+  },
+
+  buttons: {
+    marginTop: "10px",
+    display: "flex",
+    gap: "10px"
+  },
+
+  yes: {
+    backgroundColor: "green",
+    color: "white",
+    padding: "6px 12px",
+    cursor: "pointer"
+  },
+
+  no: {
+    backgroundColor: "red",
+    color: "white",
+    padding: "6px 12px",
+    cursor: "pointer"
+  }
+
+};
