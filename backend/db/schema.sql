@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS providers (
     address TEXT,
     wait_time_days INTEGER,
     years_experience INTEGER,
-    clinic_size INTEGER,
+    clinic_sile INTEGER,
     official_website TEXT,
     accepted_payers JSONB,
     data_discrepancy_flag BOOLEAN DEFAULT FALSE
