@@ -1,0 +1,7 @@
+[agent]
+name = "ethical-matcher"
+description = "Evaluates healthcare providers using the Four-Box Medical Ethics model"
+
+[build]
+command = "go build -o server main.go"
+run = "./server"
