@@ -23,6 +23,15 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:password@localhost:543
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
+BEST_FIT_DEFINITION = """
+Ranked Criteria for Best Fit:
+1. Insurance Acceptance: Provider MUST accept the patient's specific insurance plan. This is a non-negotiable requirement.
+2. Clinical Specialization: The provider's specialty must be an exact match for the patient's primary clinical need (e.g., a Cardiologist for chest pain).
+3. Location & Accessibility: Favor providers located in the same borough (NYC) or with the shortest geographical distance.
+4. Operational Efficiency: Prioritize providers with shorter wait times (wait_time_days) and stable clinic staff counts.
+5. Data Reliability: Favor providers where data_discrepancy_flag is False. If True, lower the match score and add a warning.
+"""
+
 class HandoffRequest(BaseModel):
     patientContext: str
     patientName: str
@@ -39,10 +48,12 @@ async def match_providers(request: Request):
     cur.execute("SELECT * FROM providers")
     providers = cur.fetchall()
     cur.close()
+    cur.close()
     conn.close()
 
-    system_prompt = "You are a healthcare matching specialist. Match the patient context to the best 3 providers."
+    system_prompt = f"You are a healthcare matching specialist. {BEST_FIT_DEFINITION} Analyze the patient context against the providers and return the top 3 matches as a JSON object with a 'matches' array."
     prompt = f"Patient Context: {patient_context}\nProviders: {json.dumps(providers)}"
+
     
     response = client.chat.completions.create(
         model="gpt-4o",
