@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -137,6 +138,10 @@ func setupCORS(w *http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Warning: .env file not found")
+	}
 	dbURL := os.Getenv("DATABASE_URL")
 	DB, _ = sql.Open("postgres", dbURL)
 	defer DB.Close()
