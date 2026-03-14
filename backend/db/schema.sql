@@ -46,3 +46,6 @@ CREATE TABLE IF NOT EXISTS authorizations (
     confidence_score INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Enable Realtime for the authorizations table
+ALTER PUBLICATION supabase_realtime ADD TABLE authorizations;
