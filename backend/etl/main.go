@@ -174,9 +174,10 @@ func main() {
 		providers = append(providers, provider)
 
 		// Save to DB
+		acceptedPayersJSON, _ := json.Marshal(linkedPlans)
 		_, err = db.Exec(`
-			INSERT INTO provider (npi, full_name, specialty, address, wait_time_days, years_experience, clinic_size, official_website, data_discrepancy_flag)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			INSERT INTO providers (npi, full_name, specialty, address, wait_time_days, years_experience, clinic_size, official_website, data_discrepancy_flag, accepted_payers)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			ON CONFLICT (npi) DO UPDATE SET
 				full_name = EXCLUDED.full_name,
 				specialty = EXCLUDED.specialty,
@@ -185,8 +186,9 @@ func main() {
 				years_experience = EXCLUDED.years_experience,
 				clinic_size = EXCLUDED.clinic_size,
 				official_website = EXCLUDED.official_website,
-				data_discrepancy_flag = EXCLUDED.data_discrepancy_flag`,
-			provider.NPI, provider.FullName, provider.Specialty, provider.Address, provider.WaitTimeDays, provider.YearsExperience, provider.ClinicSize, provider.OfficialWebsite, provider.DataDiscrepancyFlag)
+				data_discrepancy_flag = EXCLUDED.data_discrepancy_flag,
+				accepted_payers = EXCLUDED.accepted_payers`,
+			provider.NPI, provider.FullName, provider.Specialty, provider.Address, provider.WaitTimeDays, provider.YearsExperience, provider.ClinicSize, provider.OfficialWebsite, provider.DataDiscrepancyFlag, acceptedPayersJSON)
 		if err != nil {
 			log.Printf("Error saving provider %d: %v", provider.NPI, err)
 			continue
