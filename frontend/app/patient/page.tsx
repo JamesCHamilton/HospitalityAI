@@ -105,9 +105,16 @@ export default function PatientPage() {
                   value={formData.insurance}
                   onChange={e => setFormData({...formData, insurance: e.target.value})}
                 >
-                  <option value="fid_med_ny">Fidelis Care Medicaid</option>
-                  <option value="aet_choice_ppo">Aetna Choice PPO</option>
-                  <option value="bcbs_blue_empire">Empire BCBS</option>
+                  <option value="FAKE_BCBS_HMO_001">BlueCross HMO Silver</option>
+                  <option value="FAKE_UNITED_PPO_002">United PPO Platinum</option>
+                  <option value="FAKE_AETNA_EPO_003">Aetna EPO Gold</option>
+                  <option value="FAKE_MEDICAID_NY_004">NY State Medicaid</option>
+                  <option value="FAKE_OSCAR_HMO_005">Oscar Classic HMO</option>
+                  <option value="FAKE_EMPIRE_POS_006">Empire POS Flexible</option>
+                  <option value="FAKE_CIGNA_OAP_007">Cigna Open Access Plus</option>
+                  <option value="FAKE_HUMANA_HMO_008">Humana Essential HMO</option>
+                  <option value="FAKE_MEDICARE_009">Original Medicare</option>
+                  <option value="FAKE_FIDELIS_NY_010">Fidelis Care Essential Plan</option>
                 </select>
               </div>
             </div>
