@@ -1,6 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'postgresql://postgres:[EvNtDRofOMNH9kAV]@db.wfhzfttltzjqtlndvice.supabase.co:5432/postgres'
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_4j5IpGVu4T-vVT-gI8sM9Q_fKTWdugo'
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+if (supabaseUrl === undefined) {
+  throw new Error("Supabase URL is not defined")
+}
+if (supabaseKey === undefined) {
+  throw new Error("Supabase key is not defined")
+}
+
+
+export const supabase = createClient(supabaseUrl, supabaseKey)

@@ -1,132 +1,149 @@
 "use client";
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Clock, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Clock, RefreshCcw, XCircle, CheckCircle2, Lock } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 export default function InsuranceQueue() {
-  const [authorizations, setAuthorizations] = useState<any[]>([]);
+  const [claims, setClaims] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchQueue = async () => {
+  const fetchClaims = async () => {
     try {
-      const res = await fetch('http://localhost:8080/api/queue');
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
-      setAuthorizations(data || []);
+      // Using the detail-rich endpoint from your main.py
+      const res = await fetch('http://localhost:8080/pending-with-claim');
+      // Also fetch non-pending claims to fill the other columns
+      // For a production app, we'd have a single endpoint, but we'll simulate here
+      const resAll = await fetch('http://localhost:8080/api/queue'); 
+      const data = await resAll.json();
+      setClaims(data || []);
     } catch (err) {
-      console.error("Failed to fetch queue", err);
+      console.error("Failed to fetch claims", err);
     } finally {
       setLoading(false);
     }
   };
 
+  const handleApprove = async (id: string) => {
+    await fetch(`http://localhost:8080/claims/${id}/approve`, { method: 'POST' });
+    fetchClaims();
+  };
+
+  const handleDeny = async (id: string) => {
+    await fetch(`http://localhost:8080/claims/${id}/disapprove`, { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: "Manual denial by adjudicator" })
+    });
+    fetchClaims();
+  };
+
+  const handleReopen = async (id: string) => {
+    // Reopen moves it back to manual review (status: pending)
+    await fetch(`http://localhost:8080/claims/${id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'pending' })
+    });
+    fetchClaims();
+  };
+
   useEffect(() => {
-    fetchQueue();
-
-    // Subscribe to real-time changes
-    const channel = supabase
-      .channel('authorizations_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'authorizations'
-        },
-        (payload) => {
-          console.log('Change received!', payload);
-          fetchQueue(); // Re-fetch to get the full joined data (patient name, etc.)
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    fetchClaims();
+    // Subscribe to any changes in the authorizations/claims table
+    const channel = supabase.channel('claims_sync').on('postgres_changes', { event: '*', schema: 'public', table: 'authorizations' }, () => fetchClaims()).subscribe();
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
-  if (loading) return (
-    <div className="p-8 text-center animate-pulse text-blue-600 font-bold">
-      AI Reasoning Engine Syncing...
+  if (loading) return <div className="p-20 text-center font-black text-blue-600 animate-pulse uppercase tracking-[0.2em]">Syncing Claims...</div>;
+
+  // Filter based on the status strings used in your backend endpoints
+  const manual = claims.filter(c => c.status === 'pending' || c.status === 'MANUAL_REVIEW');
+  const accepted = claims.filter(c => c.status === 'approved' || c.status === 'AUTO-APPROVED');
+  const denied = claims.filter(c => c.status === 'denied' || c.status === 'DENIED');
+
+  const ClaimColumn = ({ title, items, color, icon: Icon, isManual }: any) => (
+    <div className="flex-1 flex flex-col min-w-[350px] bg-gray-50/50 rounded-[32px] border border-gray-100 p-6 h-[calc(100vh-150px)]">
+      <div className="flex items-center justify-between mb-6 px-2">
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-lg bg-white shadow-sm ${color}`}>
+            <Icon className="h-5 w-5" />
+          </div>
+          <h2 className="font-black uppercase tracking-widest text-xs text-gray-600">{title}</h2>
+        </div>
+        <span className="bg-white px-3 py-1 rounded-full text-[10px] font-bold text-gray-400 shadow-sm border border-gray-50">{items.length}</span>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+        {items.map((c: any) => (
+          <div key={c.id || c.claim_id} className="bg-white p-6 rounded-2xl border-2 border-transparent shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all group">
+            <div className="flex justify-between items-start mb-3">
+              <div>
+                <h3 className="font-black text-gray-900 text-lg leading-none mb-1">{c.patient_name || "Patient"}</h3>
+                <span className="text-[10px] font-mono text-gray-400 uppercase">Ref: {(c.id || c.claim_id).substring(0,8)}</span>
+              </div>
+              <div className="px-2 py-1 bg-gray-50 rounded text-[8px] font-black text-gray-400 uppercase tracking-tighter">Priority: {c.priority_score || 50}</div>
+            </div>
+            
+            <p className="text-xs text-gray-500 font-medium leading-relaxed italic mb-6 line-clamp-3">
+              "{c.decision_reason || c.description || "No clinical notes available."}"
+            </p>
+
+            <div className="grid grid-cols-2 gap-3 pt-4 border-t border-gray-50">
+              {isManual ? (
+                <>
+                  <button 
+                    onClick={() => handleApprove(c.id || c.claim_id)}
+                    className="flex items-center justify-center gap-2 py-3 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-green-700 transition-all shadow-lg shadow-green-900/20"
+                  >
+                    <CheckCircle2 className="w-3 h-3" /> Accept
+                  </button>
+                  <button 
+                    onClick={() => handleDeny(c.id || c.claim_id)}
+                    className="flex items-center justify-center gap-2 py-3 bg-red-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-700 transition-all shadow-lg shadow-red-900/20"
+                  >
+                    <XCircle className="w-3 h-3" /> Deny
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button 
+                    onClick={() => handleReopen(c.id || c.claim_id)}
+                    className="flex items-center justify-center gap-2 py-3 border-2 border-gray-100 text-gray-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-50 transition-all"
+                  >
+                    <RefreshCcw className="w-3 h-3" /> Reopen
+                  </button>
+                  <button className="flex items-center justify-center gap-2 py-3 border-2 border-gray-100 text-gray-300 rounded-xl text-[10px] font-black uppercase tracking-widest hover:text-gray-500 transition-all cursor-not-allowed">
+                    <Lock className="w-3 h-3" /> Close
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
+    <div className="p-10 h-screen overflow-hidden flex flex-col bg-white">
+      <div className="flex justify-between items-end mb-10 shrink-0">
         <div>
-          <h1 className="text-3xl font-bold">Payer Authorization Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-1 font-medium">Real-time Auto-Adjudication Stream</p>
-        </div>
-        <div className="px-4 py-2 bg-blue-100 text-blue-700 rounded-full text-[10px] font-black uppercase tracking-widest animate-pulse border border-blue-200">
-          Supabase Realtime Active
+          <h1 className="text-5xl font-black text-gray-900 tracking-tighter mb-2">Adjudication Pipeline</h1>
+          <div className="flex items-center gap-4">
+            <p className="text-sm text-gray-400 font-bold uppercase tracking-[0.2em]">Internal Insurance Terminal</p>
+            <div className="h-1 w-1 rounded-full bg-gray-300"></div>
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-ping"></div>
+              <span className="text-[10px] font-black text-green-600 uppercase tracking-widest">Real-time Connection Stable</span>
+            </div>
+          </div>
         </div>
       </div>
       
-      <div className="space-y-4">
-        {authorizations.length === 0 && (
-          <div className="p-16 text-center border-4 border-dotted border-gray-100 rounded-[32px] text-gray-400">
-            <Clock className="mx-auto h-12 w-12 text-gray-200 mb-4" />
-            <p className="font-medium">Waiting for AI decisions...</p>
-          </div>
-        )}
-        {authorizations.map((a) => (
-          <div key={a.id} className={`p-6 rounded-[24px] border-2 flex items-center justify-between transition-all hover:shadow-xl hover:scale-[1.01] ${
-            a.status === 'AUTO-APPROVED' ? 'bg-green-50 border-green-100' : 
-            a.status === 'DENIED' ? 'bg-red-50 border-red-100' : 'bg-yellow-50 border-yellow-100'
-          }`}>
-            <div className="flex items-center space-x-6">
-              <div className={`p-4 rounded-2xl ${
-                a.status === 'AUTO-APPROVED' ? 'bg-green-100 text-green-600' : 
-                a.status === 'DENIED' ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-600'
-              }`}>
-                {a.status === 'AUTO-APPROVED' && <ShieldCheck className="h-8 w-8" />}
-                {a.status === 'DENIED' && <ShieldAlert className="h-8 w-8" />}
-                {a.status === 'MANUAL_REVIEW' && <Clock className="h-8 w-8" />}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-xl text-gray-900">{a.patient_name}</h3>
-                  <span className="text-[10px] bg-gray-200 px-2 py-0.5 rounded text-gray-500 font-mono font-bold tracking-tighter">
-                    {a.id.substring(0,8)}
-                  </span>
-                </div>
-                <p className="text-sm text-gray-600 mt-1 max-w-md font-medium">
-                  {a.decision_reason}
-                </p>
-                <div className="flex gap-4 mt-3 items-center">
-                  <div className="px-3 py-1 bg-white rounded-lg border border-gray-200 shadow-sm">
-                    <span className="text-[10px] font-black uppercase tracking-tighter text-gray-400 block leading-none">Priority</span>
-                    <span className="text-sm font-bold text-gray-700">{a.priority_score}/100</span>
-                  </div>
-                  <div className="px-3 py-1 bg-white rounded-lg border border-gray-200 shadow-sm">
-                    <span className="text-[10px] font-black uppercase tracking-tighter text-gray-400 block leading-none">Confidence</span>
-                    <span className="text-sm font-bold text-gray-700">{a.confidence_score}%</span>
-                  </div>
-                  {a.confidence_score < 85 && a.status === 'MANUAL_REVIEW' && (
-                    <div className="flex items-center px-3 py-1 bg-orange-100 rounded-lg text-orange-600 border border-orange-200">
-                      <AlertTriangle className="w-3 h-3 mr-1" />
-                      <span className="text-[10px] font-black uppercase tracking-tighter">Review Required</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className={`px-4 py-1.5 rounded-full font-black text-[10px] uppercase tracking-widest inline-block ${
-                a.status === 'AUTO-APPROVED' ? 'bg-green-600 text-white' : 
-                a.status === 'DENIED' ? 'bg-red-600 text-white' : 'bg-yellow-500 text-white'
-              }`}>
-                {a.status}
-              </div>
-              <div className="mt-4">
-                <button className="text-[10px] font-black text-blue-600 hover:text-blue-800 uppercase tracking-widest border-b-2 border-blue-100">
-                  Inspect FHIR Bundle
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
+      <div className="flex gap-8 overflow-x-auto pb-6 flex-1 px-2">
+        <ClaimColumn title="Manual Review" items={manual} color="text-yellow-500" icon={Clock} isManual={true} />
+        <ClaimColumn title="Accepted" items={accepted} color="text-green-600" icon={ShieldCheck} isManual={false} />
+        <ClaimColumn title="Denied" items={denied} color="text-red-600" icon={ShieldAlert} isManual={false} />
       </div>
     </div>
   );
