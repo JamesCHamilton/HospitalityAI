@@ -202,33 +202,39 @@ def get_pending_claims(db: Session = Depends(get_db)):
         })
     return result
 
-@app.get("/pending-with-claim")
-def get_pending_claims_with_details(db: Session = Depends(get_db)):
+@app.get("/claims")
+def get_claims_with_details(status: str = "pending", db: Session = Depends(get_db)):
     """
     Get all claims with status 'pending', sorted by descending priority_score (no queue),
     joining provider, patient, and provider's insurance(s).
     """
-    from models import Claim, Provider, Patient, Insurance
+
 
     # Only "pending" claims, sort by priority_score desc, join everything needed.
+    # Sort by priority_score desc if status != "pending", else by created_at desc
+    ordering = Claim.priority_score.desc() if status != "pending" else Claim.created_at.desc()
     pending_claims = (
         db.query(Claim, Provider, Patient, Insurance)
         .join(Provider, Claim.provider_npi == Provider.npi)
         .join(Patient, Claim.patient_id == Patient.id)
-        .join(Provider.insurances)  # this is many-to-many, will repeat claim for each insurance
-        .filter(Claim.status == "pending")
-        .order_by(Claim.priority_score.desc())
+        .join(Provider.insurances)
+        .filter(Claim.status == status)
+        .order_by(ordering)
         .all()
     )
 
     result = []
     for claim_obj, provider_obj, patient_obj, insurance_obj in pending_claims:
         claim_data = {
-            "claim_id": claim_obj.claim_id,
+            "id": str(claim_obj.id),
             "priority_score": claim_obj.priority_score,
-            "claim_description": claim_obj.description,
-            "claim_status": claim_obj.status,
+            "clinical_description": claim_obj.clinical_description,
+            "status": claim_obj.status,
             "diagnosis_codes": claim_obj.diagnosis_codes,
+            "cpt_codes": claim_obj.cpt_codes,
+            "status_reasoning": claim_obj.status_reasoning,
+            "created_at": str(claim_obj.created_at) if claim_obj.created_at else None,
+            "updated_at": str(claim_obj.updated_at) if claim_obj.updated_at else None,
         }
         provider_data = {
             "npi": provider_obj.npi,
@@ -247,7 +253,7 @@ def get_pending_claims_with_details(db: Session = Depends(get_db)):
             "first_name": patient_obj.first_name,
             "last_name": patient_obj.last_name,
             "clinical_history": patient_obj.clinical_history,
-            "insurance_id": patient_obj.insurance_id,
+            # "insurance_id": patient_obj.insurance_id,
         }
         result.append({
             **claim_data,
