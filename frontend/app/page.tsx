@@ -14,7 +14,7 @@ export default function LandingPage() {
             </div>
           </div>
           <h1 className="text-6xl font-black text-gray-900 tracking-tight mb-6">
-            Ethical <span className="text-blue-600">Specialist</span> Matcher
+            EthicOS - The Ethical <span className="text-blue-600">Specialist</span> Matcher and <span className="text-blue-600">Claim</span> Adjuster
           </h1>
           <p className="text-xl text-gray-600 mb-10 leading-relaxed">
             Eliminating $1T in administrative waste through 
@@ -24,7 +24,7 @@ export default function LandingPage() {
           </p>
           
           <div className="flex justify-center gap-4">
-            <span className="px-4 py-1 bg-gray-100 rounded-full text-xs font-bold text-gray-500 uppercase tracking-widest border border-gray-200">Built for Blaxel Hackathon 2026</span>
+            <span className="px-4 py-1 bg-gray-100 rounded-full text-xs font-bold text-gray-500 uppercase tracking-widest border border-gray-200">Built for Healthcare Professionals and Patients alike </span>
           </div>
         </div>
       </header>
@@ -40,7 +40,7 @@ export default function LandingPage() {
                 <UserSearch className="text-blue-600 group-hover:text-white h-8 w-8" />
               </div>
               <h2 className="text-2xl font-bold mb-3 text-gray-900">Patient Portal</h2>
-              <p className="text-gray-500 mb-6">Simulate messy PDF referral extraction and ethical specialist matching with swiping UX.</p>
+              <p className="text-gray-500 mb-6">Simulate messy PDF referral extraction and ethical specialist matching.</p>
               <div className="flex items-center text-blue-600 font-bold">
                 Start Triage <ArrowRight className="ml-2 h-4 w-4" />
               </div>
