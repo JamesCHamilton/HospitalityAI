@@ -344,7 +344,7 @@ from config.db import get_db
 
 @app.post("/claims/{claim_id}/decision")
 def claim_decision(
-    claim_id: str = Path(..., description="The ID of the claim to update"),
+    claim_id: str,
     status: str = Body(..., description="Status to set: 'approved' or 'denied'"),
     status_reasoning: str = Body(..., description="Required detailed reasoning for this decision"),
     db: Session = Depends(get_db)
@@ -355,7 +355,7 @@ def claim_decision(
     if status not in ["approved", "denied"]:
         raise HTTPException(status_code=400, detail="Status must be 'approved' or 'denied'.")
 
-    claim = db.query(Claim).filter_by(claim_id=claim_id).first()
+    claim = db.query(Claim).filter_by(id=claim_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
 
@@ -622,7 +622,7 @@ async def match_providers(
         # Compose system and user prompts for GPT
         system_prompt = (
             "You are an expert healthcare provider recommendation engine. " 
-            "Given a patient's insurance, clinical context, and retrieved provider information, select the 20 most appropriate providers. "
+            "Given a patient's clinical context, and retrieved provider information, select the 20 most appropriate providers. "
             "You must only select providers that accept the patient insurance. Rank by clinical appropriateness and relevance to the patient's case, and justify each rank in a 'reason' field. "
             "Your JSON response format: "
             "{ \"suggestions\": [ "
@@ -670,10 +670,13 @@ async def match_providers(
                 # "insurance_names": insurance_names,
                 "cpt_codes": cpt_codes,
                 "specialty_taxonomy_codes": taxonomy_codes,
-                
+                "insurance_id": structured_json["insurance_id"]
 
             },
-            "patient_summary": {k: v["value"] if isinstance(v, dict) and "value" in v else v for k, v in summary_result.items()},
+            "patient_summary": {
+                **{k: v["value"] if isinstance(v, dict) and "value" in v else v for k, v in summary_result.items()},
+                "insurance_id": structured_json["insurance_id"]
+            },
 
             # "top_matches": provider_results,
             "top_matches": ai_result.get("suggestions", []),
