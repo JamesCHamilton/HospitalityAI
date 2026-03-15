@@ -1,6 +1,10 @@
 import requests
 from models import Provider, SpecialtyTaxonomy, Base
 from config.db import SessionLocal
+import random
+
+# Assign 1-3 random insurances to this provider from the insurance table
+from models import Insurance
 
 def import_npis_from_npi_registry():
     url = "https://npiregistry.cms.hhs.gov/api/?version=2.1&city=new+york&state=ny&limit=200"
@@ -30,6 +34,8 @@ def import_npis_from_npi_registry():
             if addr.get("address_purpose", "").upper() == "LOCATION":
                 address = addr
                 break
+        
+        
 
         address_str = None
         zip_code = None
@@ -72,9 +78,15 @@ def import_npis_from_npi_registry():
             )
             session.add(provider)
         else:
+            print("Extracting and assigning random insurances")
             provider.provider_name = provider_name
             provider.address = address_str
-            provider.zip_code = zip_code[:5]
+            # provider.zip_code = zip_code[:5]
+            all_insurances = session.query(Insurance).all()
+            if all_insurances:
+                num_ins = random.randint(1, 3)
+                random_insurances = random.sample(all_insurances, min(num_ins, len(all_insurances)))
+                provider.insurances = list(random_insurances)
 
         # Set SpecialtyTaxonomies relationship (replace existing set)
         provider.specialty_taxonomies = []
@@ -83,7 +95,7 @@ def import_npis_from_npi_registry():
             if specialty:
                 provider.specialty_taxonomies.append(specialty)
 
-    session.commit()
+        session.commit()
     session.close()
 
 

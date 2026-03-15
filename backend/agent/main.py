@@ -7,6 +7,12 @@ from pydantic import BaseModel
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import openai
+from dotenv import load_dotenv
+
+# Load .env file if present for local dev environments
+load_dotenv()
+
+from unsiloed_sdk import UnsiloedClient
 
 
 app = FastAPI(title="HospitalityAI Reasoning Engine")
@@ -66,97 +72,97 @@ async def match_providers(request: Request):
     )
     return json.loads(response.choices[0].message.content)
 
-@app.post("/api/handoff")
-async def handle_handoff(req: HandoffRequest):
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    cur = conn.cursor()
+# @app.post("/api/handoff")
+# async def handle_handoff(req: HandoffRequest):
+#     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+#     cur = conn.cursor()
     
-    # 1. Get Provider Info
-    cur.execute("SELECT * FROM providers WHERE npi = %s", (req.providerNpi,))
-    provider = cur.fetchone()
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found")
+#     # 1. Get Provider Info
+#     cur.execute("SELECT * FROM providers WHERE npi = %s", (req.providerNpi,))
+#     provider = cur.fetchone()
+#     if not provider:
+#         raise HTTPException(status_code=404, detail="Provider not found")
     
-    # 2. Get or Create Patient
-    cur.execute("SELECT id FROM patients WHERE name = %s LIMIT 1", (req.patientName,))
-    patient = cur.fetchone()
-    patient_id = patient['id'] if patient else None
+#     # 2. Get or Create Patient
+#     cur.execute("SELECT id FROM patients WHERE name = %s LIMIT 1", (req.patientName,))
+#     patient = cur.fetchone()
+#     patient_id = patient['id'] if patient else None
     
-    if not patient_id:
-        cur.execute("INSERT INTO patients (name, clinical_history, insurance_id) VALUES (%s, %s, %s) RETURNING id",
-                    (req.patientName, req.patientContext, req.patientPlanId.lower()))
-        patient_id = cur.fetchone()['id']
+#     if not patient_id:
+#         cur.execute("INSERT INTO patients (name, clinical_history, insurance_id) VALUES (%s, %s, %s) RETURNING id",
+#                     (req.patientName, req.patientContext, req.patientPlanId.lower()))
+#         patient_id = cur.fetchone()['id']
 
-    # 3. AI Adjudication & Rules Engine
-    safety_context = "Warning: Data Inconsistent - Prioritize Manual Review." if provider['data_discrepancy_flag'] else "Data Verified."
+#     # 3. AI Adjudication & Rules Engine
+#     safety_context = "Warning: Data Inconsistent - Prioritize Manual Review." if provider['data_discrepancy_flag'] else "Data Verified."
     
-    system_prompt = f"""You are a Senior Insurance Adjudicator Reasoning Engine. 
-    Safety Status: {safety_context}
+#     system_prompt = f"""You are a Senior Insurance Adjudicator Reasoning Engine. 
+#     Safety Status: {safety_context}
     
-    Adjudication Criteria:
-    1. Network Adequacy: Verify if the provider accepts the patient's plan ({req.patientPlanId}).
-    2. Step Therapy: Check if the clinical context ({req.patientContext}) suggests a procedure that requires previous conservative steps (e.g., PT before MRI/Surgery).
-    3. Medical Necessity: Evaluate if the specialist match is medically appropriate for the reported symptoms.
-    4. Urgency Score: Assign a priority_score (0-100) based on clinical risk.
+#     Adjudication Criteria:
+#     1. Network Adequacy: Verify if the provider accepts the patient's plan ({req.patientPlanId}).
+#     2. Step Therapy: Check if the clinical context ({req.patientContext}) suggests a procedure that requires previous conservative steps (e.g., PT before MRI/Surgery).
+#     3. Medical Necessity: Evaluate if the specialist match is medically appropriate for the reported symptoms.
+#     4. Urgency Score: Assign a priority_score (0-100) based on clinical risk.
 
-    Decision Logic:
-    - AUTO-APPROVED: Confidence > 85% AND In-Network AND No Step Therapy violations.
-    - DENIED: Clear violation of plan rules or medically inappropriate.
-    - MANUAL_REVIEW: Confidence < 85% OR Ambiguous clinical data OR Data Inconsistency flag is True.
+#     Decision Logic:
+#     - AUTO-APPROVED: Confidence > 85% AND In-Network AND No Step Therapy violations.
+#     - DENIED: Clear violation of plan rules or medically inappropriate.
+#     - MANUAL_REVIEW: Confidence < 85% OR Ambiguous clinical data OR Data Inconsistency flag is True.
 
-    Return JSON with: priority_score, confidence_score, status (AUTO-APPROVED, DENIED, MANUAL_REVIEW), decision_reason, fhir_blob, efax_payload."""
+#     Return JSON with: priority_score, confidence_score, status (AUTO-APPROVED, DENIED, MANUAL_REVIEW), decision_reason, fhir_blob, efax_payload."""
     
-    prompt = f"Patient: {req.patientName}, Plan: {req.patientPlanId}, Context: {req.patientContext}, Provider: {provider['full_name']}, Accepted Payers: {provider['accepted_payers']}"
+#     prompt = f"Patient: {req.patientName}, Plan: {req.patientPlanId}, Context: {req.patientContext}, Provider: {provider['full_name']}, Accepted Payers: {provider['accepted_payers']}"
     
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        response_format={"type": "json_object"}
-    )
+#     response = client.chat.completions.create(
+#         model="gpt-4o",
+#         messages=[
+#             {"role": "system", "content": system_prompt},
+#             {"role": "user", "content": prompt}
+#         ],
+#         response_format={"type": "json_object"}
+#     )
     
-    auth_data = json.loads(response.choices[0].message.content)
-    # The AI now determines the status based on the rules provided in the system prompt
-    status = auth_data.get('status', 'MANUAL_REVIEW')
+#     auth_data = json.loads(response.choices[0].message.content)
+#     # The AI now determines the status based on the rules provided in the system prompt
+#     status = auth_data.get('status', 'MANUAL_REVIEW')
     
-    # Overwrite status if safety flag is high but AI missed it
-    if provider['data_discrepancy_flag'] and status == 'AUTO-APPROVED':
-        status = 'MANUAL_REVIEW'
-        auth_data['decision_reason'] += " (Flagged for manual review due to data discrepancy)"
+#     # Overwrite status if safety flag is high but AI missed it
+#     if provider['data_discrepancy_flag'] and status == 'AUTO-APPROVED':
+#         status = 'MANUAL_REVIEW'
+#         auth_data['decision_reason'] += " (Flagged for manual review due to data discrepancy)"
 
-    # 4. Save Authorization (The Claim)
-    cur.execute("""
-        INSERT INTO authorizations (patient_id, provider_id, priority_score, status, fhir_blob, efax_payload, decision_reason, confidence_score)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-    """, (
-        patient_id, req.providerNpi, auth_data['priority_score'], status, 
-        json.dumps(auth_data['fhir_blob']), auth_data['efax_payload'], 
-        auth_data['decision_reason'], auth_data['confidence_score']
-    ))
+#     # 4. Save Authorization (The Claim)
+#     cur.execute("""
+#         INSERT INTO authorizations (patient_id, provider_id, priority_score, status, fhir_blob, efax_payload, decision_reason, confidence_score)
+#         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+#         RETURNING id
+#     """, (
+#         patient_id, req.providerNpi, auth_data['priority_score'], status, 
+#         json.dumps(auth_data['fhir_blob']), auth_data['efax_payload'], 
+#         auth_data['decision_reason'], auth_data['confidence_score']
+#     ))
     
-    auth_id = cur.fetchone()['id']
-    conn.commit()
-    cur.close()
-    conn.close()
+#     auth_id = cur.fetchone()['id']
+#     conn.commit()
+#     cur.close()
+#     conn.close()
 
-    auth_data["id"] = str(auth_id)
-    auth_data["status"] = status
-    auth_data["patient_name"] = req.patientName
-    return auth_data
+#     auth_data["id"] = str(auth_id)
+#     auth_data["status"] = status
+#     auth_data["patient_name"] = req.patientName
+#     return auth_data
 
 
 
-from fastapi import APIRouter, Depends
+from fastapi import Depends
 from sqlalchemy.orm import Session
-from backend.models import ClaimQueue, Claim, Provider, Patient
-from backend.config.db import get_db
+from models import Claim, Provider, Patient
+from config.db import get_db
 
-router = APIRouter()
 
-@router.get("/pending")
+
+@app.get("/pending")
 def get_pending_claims(db: Session = Depends(get_db)):
     """
     Get the claims queue sorted by priority_score descending.
@@ -188,13 +194,13 @@ def get_pending_claims(db: Session = Depends(get_db)):
         })
     return result
 
-@router.get("/pending-with-claim")
+@app.get("/pending-with-claim")
 def get_pending_claims_with_details(db: Session = Depends(get_db)):
     """
     Get all claims with status 'pending', sorted by descending priority_score (no queue),
     joining provider, patient, and provider's insurance(s).
     """
-    from backend.models import Claim, Provider, Patient, Insurance
+    from models import Claim, Provider, Patient, Insurance
 
     # Only "pending" claims, sort by priority_score desc, join everything needed.
     pending_claims = (
@@ -242,15 +248,15 @@ def get_pending_claims_with_details(db: Session = Depends(get_db)):
         })
     return result
 
-from fastapi import APIRouter, Query
+from fastapi import Query
 from sqlalchemy.orm import Session
 from fastapi import Depends
-from backend.models import Claim, Patient
-from backend.config.db import get_db
+from models import Claim, Patient
+from config.db import get_db
 
-router = APIRouter()
+# app = APIapp()
 
-@router.get("/claims/by-provider/{provider_id}")
+@app.get("/claims/by-provider/{provider_id}")
 def get_claims_by_provider(
     provider_id: str,
     status: str = Query(None, description="Filter claims by status"),
@@ -285,7 +291,7 @@ def get_claims_by_provider(
         results.append(claim_dict)
     return results
 
-@router.get("/claims/by-patient/{patient_id}")
+@app.get("/claims/by-patient/{patient_id}")
 def get_claims_by_patient(
     patient_id: str,
     status: str = Query(None, description="Filter claims by status"),
@@ -295,7 +301,7 @@ def get_claims_by_patient(
     Return claims for a given patient_id, with each claim including joined provider data.
     Optionally filtered by status.
     """
-    from backend.models import Provider  # Local import in case Provider isn't already imported
+    from models import Provider  # Local import in case Provider isn't already imported
     query = db.query(Claim, Provider).join(Provider, Claim.provider_npi == Provider.npi).filter(Claim.patient_id == patient_id)
     if status:
         query = query.filter(Claim.status == status)
@@ -329,14 +335,13 @@ def get_claims_by_patient(
     return results
 
 
-from fastapi import APIRouter, HTTPException, Path, Body, Depends
+from fastapi import HTTPException, Path, Body, Depends
 from sqlalchemy.orm import Session
-from backend.models import Claim
-from backend.config.db import get_db
+from models import Claim
+from config.db import get_db
 
-router = APIRouter()
 
-@router.post("/claims/{claim_id}/approve")
+@app.post("/claims/{claim_id}/approve")
 def approve_claim(
     claim_id: str = Path(..., description="The ID of the claim to approve"),
     db: Session = Depends(get_db)
@@ -353,7 +358,7 @@ def approve_claim(
     return {"claim_id": claim.claim_id, "status": claim.status}
 
 
-@router.post("/claims/{claim_id}/disapprove")
+@app.post("/claims/{claim_id}/disapprove")
 def disapprove_claim(
     claim_id: str = Path(..., description="The ID of the claim to disapprove"),
     reason: str = Body(None, description="Optional reason for disapproval"),
@@ -375,6 +380,227 @@ def disapprove_claim(
 
 
 
+from fastapi import File, UploadFile, Form
+from typing import List, Optional
+import tempfile
+import os
+
+from models import Provider, Insurance, SpecialtyTaxonomy
+# from agent.tools import tools  # if you want to use tool helpers
+
+# Dummy function for "unsoiled" clinical data extraction.
+# In production, replace with actual model/service call.
+def unsoiled_extract_summary(file_path: Optional[str], json_data: dict) -> dict:
+    """
+    Use Unsoiled or LLM or OCR/extraction pipeline to generate
+    an overview from file and supplemental JSON data.
+    Here we simulate the output format.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "clinical_summary": {
+                "type": "string",
+                "description": "A natural language summary of the clinical note, suitable for clinician review."
+            },
+            "cpt_codes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of relevant CPT codes found in the clinical note"
+            },
+            "icd10_codes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of ICD-10 diagnosis codes referenced in the note"
+            },
+            "specialty_taxonomy_codes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Array of provider specialty taxonomy codes mentioned or inferred from the clinical context. Eunsure it exists or find any closest taxonomy code to the clinical description"
+            }
+        },
+        "required": ["clinical_summary", "cpt_codes", "icd10_codes", "specialty_taxonomy_codes"],
+        "additionalProperties": False
+    }
+
+    with UnsiloedClient(api_key=os.environ.get("UNSILOED_API_KEY")) as client:
+        # Extract and wait for completion
+        result = client.extract_and_wait(
+            file=file_path,
+            schema=schema
+        )
+
+    # # Access extracted data with confidence scores
+    # print(f"Title: {result.result['title']['value']}")
+    # print(f"Confidence: {result.result['title']['score']:.2%}")
+    # Example extraction, for demo:
+    return {
+        "clinical_summary": result.result.get("clinical_summary", "Clinical summary goes here."),
+        "cpt_codes": result.result.get("cpt_codes", []),
+        "icd10_codes": result.result.get("icd10_codes", []),
+        "specialty_taxonomy_codes": result.result.get("specialty_taxonomy_codes", [])
+    }
+
+
+@app.post("/match_providers")
+async def match_providers(
+    file: Optional[UploadFile] = File(None, description="PDF or image of clinical document"),
+    json_data: Optional[str] = Form(None, description="Raw JSON with insurance names, CPT codes, taxonomy codes"),
+    db: Session = Depends(get_db)
+):
+    """
+    Accepts an uploaded document (image/pdf) and supplemental JSON describing insurances/CPT/specialty,
+    runs 'unsoiled' (LLM/OCR pipeline, mocked here) to extract clinical/integration fields,
+    then matches and returns the top 20 most compatible providers.
+    """
+    import json
+
+    # Save uploaded file if present
+    temp_file_path = None
+    print("checking file", file)
+    if file:
+        print("has file", file.filename)
+        suffix = os.path.splitext(file.filename)[-1] if file.filename else ".bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            temp_file_path = tmp.name
+            content = await file.read()
+            tmp.write(content)
+
+    try:
+        # Parse the supplemental data
+        structured_json = json.loads(json_data) if json_data else {}
+
+        # --- 1. Run "Unsoiled" pipeline / summary LLM/OCR step (mocked here) ---
+        summary_result = unsoiled_extract_summary(temp_file_path, structured_json)
+        print('summary results', summary_result)
+        # Extract insurance_names, cpt_codes, taxonomy_codes according to referenced schema
+        insurance_names = summary_result.get("insurance_names", [])
+        # CPT codes: value is under 'cpt_codes' > 'value', which may be None or a list
+        cpt_codes_result = summary_result.get("cpt_codes", {})
+        cpt_codes = cpt_codes_result.get("value", []) if cpt_codes_result else []
+        if cpt_codes is None:
+            cpt_codes = []
+        # Specialty taxonomy codes: value is under 'specialty_taxonomy_codes' > 'value'
+        taxonomy_result = summary_result.get("specialty_taxonomy_codes", {})
+        taxonomy_codes = taxonomy_result.get("value", []) if taxonomy_result else []
+        if taxonomy_codes is None:
+            taxonomy_codes = []
+
+        # --- 2. Query DB to find matching providers ---
+        # Filter by insurance (join), CPT, and specialty taxonomy codes
+        query = db.query(Provider)\
+            .join(Provider.insurances)\
+            .join(Provider.specialty_taxonomies)
+
+        filters = []
+        # if insurance_names:
+        #     filters.append(Insurance.insurance_name.in_(insurance_names))
+        if taxonomy_codes:
+            filters.append(SpecialtyTaxonomy.taxonomy_code.in_(taxonomy_codes))
+        # CPT logic: not all providers have CPT, so just report in results?
+
+        if filters:
+            query = query.filter(*filters)
+
+        query = query.distinct().limit(50)
+
+        providers = query.all()
+        print("Query results",providers)
+
+        # Compose the result for each provider
+        provider_results = []
+        for p in providers:
+            provider_results.append({
+                "npi": p.npi,
+                "provider_name": p.provider_name,
+                "address": p.address,
+                "zip_code": p.zip_code,
+                "insurances": [
+                    {
+                        "insurance_id": ins.insurance_id,
+                        "insurance_name": ins.insurance_name,
+                        "insurer": ins.insurer,
+                        "plan_type": ins.plan_type,
+                    } for ins in p.insurances
+                ],
+                "specialty_taxonomies": [
+                    {
+                        "taxonomy_code": tx.taxonomy_code,
+                        "type": tx.taxonomy_type,
+                        "desc": tx.provider_type_description
+                    } for tx in p.specialty_taxonomies
+                ],
+                "wait_time_days": p.wait_time_days,
+                "years_experience": p.years_experience,
+                "clinic_size": p.clinic_size,
+                "official_website": p.official_website,
+            })
+
+       
+        # Use OpenAI agent to rank/suggest top 20 providers based on user insurance and full clinical context
+        # Compose system and user prompts for GPT
+        system_prompt = (
+            "You are an expert healthcare provider recommendation engine. " 
+            "Given a patient's insurance, clinical context, and retrieved provider information, select the 20 most appropriate providers. "
+            "You must only select providers that accept the patient insurance. Rank by clinical appropriateness and relevance to the patient's case, and justify each rank in a 'reason' field. "
+            "Your JSON response format: "
+            "{ \"suggestions\": [ "
+            "  { \"id\": <provider_id>, \"npi\": <npi>, \"provider_name\": <name>, \"reason\": <justification>, \"insurances\": [...], \"specialty_taxonomies\": [...], \"match_score\": <score between 0 and 1, higher is better> }, ... "
+            "], "
+            "\"criteria_summary\": <short (2-3 sentences) explanation explaining how you determined ranking and fit> "
+            "}"
+        )
+
+        user_prompt = (
+            f"PATIENT Information: {json.dumps(json_data)}\n"
+            f"CLINICAL DOCUMENTS: {json.dumps(summary_result)}\n"
+            f"RAW_PROVIDERS: {json.dumps(provider_results)}\n"
+            "Please answer in the specified JSON format with exactly 20 suggestions."
+        )
+
+        try:
+            completion = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+            ai_output = completion.choices[0].message.content
+            print("Ai result",ai_output)
+            ai_result = json.loads(ai_output)
+        except Exception as e:
+            # If there's any failure in LLM, fall back to first 20 providers with generic reasons
+            ai_result = {
+                "suggestions": [
+                    dict(
+                        p,
+                        reason="Automatically selected provider from query results. LLM scoring unavailable."
+                    ) for p in provider_results[:20]
+                ],
+                "criteria_summary": "Fallback to default provider order. LLM scoring not available."
+            }
+
+        # Compose the final result including the AI suggestions/rankings
+        return {
+            # "summary": summary_result["overview"],
+            "criteria": {
+                # "insurance_names": insurance_names,
+                "cpt_codes": cpt_codes,
+                "specialty_taxonomy_codes": taxonomy_codes,
+                
+
+            },
+            "patient_summary":summary_result,
+
+            # "top_matches": provider_results,
+            "top_matches": ai_result.get("suggestions", []),
+            "llm_criteria_summary": ai_result.get("criteria_summary", ""),
+        }
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
 
 
 

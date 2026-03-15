@@ -6,6 +6,7 @@ def add_fake_insurances():
     Adds a short set of representative fake insurances to the DB,
     with some basic real-world-inspired characteristics.
     """
+    print("starting addtions")
     session = SessionLocal()
 
     # Define fake insurance plans (can be extended/modified)
@@ -162,5 +163,4 @@ def add_fake_insurances():
     session.commit()
     session.close()
 
-if __name__ == "__main__":
-    add_fake_insurances()
+add_fake_insurances()

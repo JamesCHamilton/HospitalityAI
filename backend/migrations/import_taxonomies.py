@@ -17,25 +17,38 @@ def import_specialty_taxonomies(csv_path):
         for row in reader:
             # Remove leading/trailing whitespace from values, (some codes in csv have trailing spaces)
             print(row, "thing")
-            taxonomy_code = row['PROVIDER TAXONOMY CODE'].strip()
-            medicare_specialty_code = row['MEDICARE SPECIALTY CODE'].strip()
-            provider_type_description = row['MEDICARE PROVIDER/SUPPLIER TYPE DESCRIPTION'].strip()
-            taxonomy_type = row['PROVIDER TAXONOMY DESCRIPTION:  TYPE, CLASSIFICATION, SPECIALIZATION'].strip()
+            try:
+                taxonomy_code = row['PROVIDER TAXONOMY CODE'].strip()
+                medicare_specialty_code = row['MEDICARE SPECIALTY CODE'].strip()
+                provider_type_description = row['MEDICARE PROVIDER/SUPPLIER TYPE DESCRIPTION'].strip()
+                taxonomy_type = row['PROVIDER TAXONOMY DESCRIPTION:  TYPE, CLASSIFICATION, SPECIALIZATION'].strip()
 
-            import_id = f"{medicare_specialty_code}_{taxonomy_code}"
+                import_id = f"{medicare_specialty_code}_{taxonomy_code}"
 
-            exists = session.query(SpecialtyTaxonomy).filter_by(import_id=import_id).first()
-            if not exists:
-                specialty = SpecialtyTaxonomy(
-                    taxonomy_code=taxonomy_code,
-                    medicare_specialty_code=medicare_specialty_code,
-                    provider_type_description=provider_type_description,
-                    taxonomy_type=taxonomy_type,
-                    import_id=import_id,
-                )
-                session.add(specialty)
+                exists = session.query(SpecialtyTaxonomy).filter_by(import_id=import_id).first()
+                if not exists:
+                    print("Creating new")
+                    specialty = SpecialtyTaxonomy(
+                        taxonomy_code=taxonomy_code,
+                        medicare_specialty_code=medicare_specialty_code,
+                        provider_type_description=provider_type_description,
+                        taxonomy_type=taxonomy_type,
+                        import_id=import_id,
+                    )
+                    session.add(specialty)
+                    try:
+                        session.commit()
+                    except Exception as db_err:
+                        # Likely a duplicate primary key or integrity error, skip commit for this row
+                        print(f"Skipping row (duplicate or error on commit): {row}. DB Error: {db_err}")
+                        session.rollback()
+                else:
+                    # Already exists, skip commit for this row
+                    pass
 
-        session.commit()
+            except Exception as err:
+                print(f"Error processing row {row}: {err}")
+            
     session.close()
 
 

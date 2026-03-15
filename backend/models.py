@@ -82,9 +82,11 @@ class Provider(Base):
         back_populates="providers"
     )
 
+import uuid
+
 class Patient(Base):
     __tablename__ = "patients"
-    id = Column(String, primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
     clinical_history = Column(String)
@@ -100,8 +102,8 @@ from sqlalchemy.sql import func
 class Claim(Base):
     __tablename__ = "claims"
     claim_id = Column(String, primary_key=True)
-    patient_id = Column(String, ForeignKey("patients.id"))
-    provider_npi = Column(String, ForeignKey("providers.npi"))  # Include provider reference
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"))
+    provider_npi = Column(String, ForeignKey("providers.npi"))
     description = Column(String)
     diagnosis_codes = Column(JSONB)  # List of ICD-10 or other codes
     status = Column(String)  # e.g., "approved", "denied", "in progress", etc.
@@ -114,9 +116,10 @@ class Claim(Base):
     
     # Relationships
     patient = relationship("Patient", back_populates="claims")
-    provider = relationship("Provider")
+    provider = relationship("Provider", foreign_keys=[provider_npi])
     # claim_queue = relationship("ClaimQueue", back_populates="claim", uselist=False)
     priority_score = Column(Integer)
+
 
 
 
