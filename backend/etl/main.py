@@ -8,6 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 import psycopg2
 from psycopg2.extras import execute_values
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(title="HospitalityAI Ingestion Service")
 
@@ -21,7 +24,7 @@ app.add_middleware(
 
 # Configuration
 UNSILOED_API_KEY = os.getenv("UNSILOED_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL", "postgres://user:password@localhost:5432/hospitality_db")
+DATABASE_URL = os.getenv("DATABASE_URL")
 CRUSTDATA_TOKEN = os.getenv("CRUSTDATA_API_KEY")
 print(CRUSTDATA_TOKEN)
 
@@ -116,12 +119,17 @@ async def ingest_data(
             clinical_history = extracted_data["clinical_reason"]
             insurance_id = extracted_data["insurance_payer"].lower().replace(" ", "_")
 
+    # Handle name splitting for the patients table schema
+    name_parts = (patient_name or "Unknown Patient").split(" ", 1)
+    first_name = name_parts[0]
+    last_name = name_parts[1] if len(name_parts) > 1 else ""
+
     # Persist to Supabase
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO patients (name, clinical_history, insurance_id) VALUES (%s, %s, %s) RETURNING id",
-        (patient_name, clinical_history, insurance_id)
+        'INSERT INTO patients ("firstName", "lastName", clinical_history, insurance_id) VALUES (%s, %s, %s, %s) RETURNING id',
+        (first_name, last_name, clinical_history, insurance_id)
     )
     patient_id = cur.fetchone()[0]
     conn.commit()
