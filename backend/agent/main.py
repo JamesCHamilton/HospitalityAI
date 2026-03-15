@@ -8,6 +8,14 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import openai
 from dotenv import load_dotenv
+from fastapi import APIRouter, Body
+from agents import Agent, Runner
+from tools import (
+    AgentContext,
+    record_provider_decision,
+    create_priority_score,
+)
+
 
 # Load .env file if present for local dev environments
 load_dotenv()
@@ -156,7 +164,7 @@ async def match_providers(request: Request):
 
 
 from fastapi import Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from models import Claim, Provider, Patient
 from config.db import get_db
 
@@ -171,7 +179,7 @@ def get_pending_claims(db: Session = Depends(get_db)):
     # Join ClaimQueue with Claim so that we get data from both in each row ("like a view")
     pending = (
         db.query(ClaimQueue, Claim)
-        .join(Claim, ClaimQueue.claim_id == Claim.claim_id)
+        .join(Claim, ClaimQueue.claim_id == Claim.id)
         .order_by(ClaimQueue.priority_score.desc())
         .all()
     )
@@ -274,7 +282,7 @@ def get_claims_by_provider(
     results = []
     for claim, patient in records:
         claim_dict = {
-            "claim_id": claim.claim_id,
+            "claim_id": claim.id,
             "patient_id": claim.patient_id,
             "provider_npi": claim.provider_npi,
             "description": claim.description,
@@ -310,7 +318,7 @@ def get_claims_by_patient(
     results = []
     for claim, provider in records:
         claim_dict = {
-            "claim_id": claim.claim_id,
+            "claim_id": claim.id,
             "patient_id": claim.patient_id,
             "provider_npi": claim.provider_npi,
             "description": claim.description,
@@ -355,7 +363,7 @@ def approve_claim(
     claim.status = "approved"
     db.commit()
     db.refresh(claim)
-    return {"claim_id": claim.claim_id, "status": claim.status}
+    return {"claim_id": claim.id, "status": claim.status}
 
 
 @app.post("/claims/{claim_id}/disapprove")
@@ -375,8 +383,7 @@ def disapprove_claim(
         claim.description = (claim.description or "") + f"\nDenial reason: {reason}"
     db.commit()
     db.refresh(claim)
-    return {"claim_id": claim.claim_id, "status": claim.status, "denial_reason": reason}
-
+    return {"claim_id": claim.id, "status": claim.status, "denial_reason": reason}
 
 
 
@@ -592,7 +599,7 @@ async def match_providers(
                 
 
             },
-            "patient_summary":summary_result,
+            "patient_summary": {k: v["value"] if isinstance(v, dict) and "value" in v else v for k, v in summary_result.items()},
 
             # "top_matches": provider_results,
             "top_matches": ai_result.get("suggestions", []),
@@ -601,6 +608,119 @@ async def match_providers(
     finally:
         if temp_file_path and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
+
+
+provider_agent = Agent(
+    name="Provider Qualification Agent",
+    instructions="""
+    ### ROLE
+    You are a healthcare triage AI.
+
+    ### EVALUATION
+    Use the 4 Box Model to guide your reasoning and decision:
+    - Box 1 (Clinical Indication): Does the provider's specialty and clinical capabilities fit the patient's presenting problem/need?
+    - Box 2 (Insurance): Does the provider accept the patient's insurance and/or specific plan?
+    - Box 3 (Operations): Is the provider accessible in terms of wait time, location, and operational capacity?
+    - Box 4 (Data/Safety): Are there any flags for data discrepancy or missing/uncertain information?
+
+    ### OBJECTIVE
+    Systematically consider each box above. If the provider clearly meets or fails critical requirements in Boxes 1 or 2,
+    call 'record_provider_decision' to finalize the status. If further review is needed but the match is promising, call
+    'create_priority_score' (range 0.0 - 1.0) based on overall fit (weighing all four boxes) and set the status to pending.
+
+    ONLY ONE TOOL SHOULD BE CALLED IN THIS PROCESS AND THAT ONE TOOL SHOULD ONLY BE CALLED ONCE
+
+    Note: Patient IDs and Provider IDs are handled automatically; you only provide scores and explicit reasoning with reference to each box.
+    Example: "Box 1: Provider is a nephrologist, matching need for kidney disease. Box 2: Accepts patient's Medicaid plan. Box 3: Short wait times (<5 days). Box 4: No major data issues."
+    """,
+    tools=[record_provider_decision, create_priority_score]
+)
+
+class ProviderEvaluateRequest(BaseModel):
+    patient_id: str
+    provider_id: str
+    cpt_codes: List[str] = []
+    icd10_codes: List[str] = []
+    specialty_taxonomy_codes: List[str] = []
+    clinical_summary: str
+    insurance: str
+
+@app.post("/agent/provider_evaluate")
+async def provider_evaluate(
+    body: ProviderEvaluateRequest = Body(...),
+    db: Session = Depends(get_db),
+):
+    # 1. Fetch relevant metadata for the AI to "read"
+    # Compose a provider_data dict using backend/models.py definitions, extracting fields including insurances as nested objects
+    raw_provider_data = db.query(Provider).filter(Provider.npi == body.provider_id)\
+        .options(joinedload(Provider.insurances), joinedload(Provider.specialty_taxonomies)).first()
+
+    if not raw_provider_data:
+        provider_data = None
+    else:
+        provider_data = {
+            "npi": raw_provider_data.npi,
+            "provider_name": raw_provider_data.provider_name,
+            "address": raw_provider_data.address,
+            "zip_code": raw_provider_data.zip_code,
+            "latitude": raw_provider_data.latitude,
+            "longitude": raw_provider_data.longitude,
+            "wait_time_days": raw_provider_data.wait_time_days,
+            "years_experience": raw_provider_data.years_experience,
+            "clinic_size": raw_provider_data.clinic_size,
+            "official_website": raw_provider_data.official_website,
+            "data_discrepancy_flag": raw_provider_data.data_discrepancy_flag,
+            "insurances": [
+                {
+                    "insurance_id": ins.insurance_id,
+                    "insurance_name": ins.insurance_name,
+                    "insurer": ins.insurer,
+                    "plan_type": ins.plan_type,
+                    "network_size": ins.network_size,
+                    "covered_specialties": ins.covered_specialties,
+                    "general_covered_icd10": ins.general_covered_icd10,
+                    "general_covered_cpt": ins.general_covered_cpt,
+                }
+                for ins in raw_provider_data.insurances
+            ],
+            "specialty_taxonomies": [
+                {
+                    "taxonomy_code": tax.taxonomy_code,
+                    "medicare_specialty_code": tax.medicare_specialty_code,
+                    "provider_type_description": tax.provider_type_description,
+                    "taxonomy_type": tax.taxonomy_type,
+                    "import_id": tax.import_id,
+                }
+                for tax in raw_provider_data.specialty_taxonomies
+            ],
+        }
+
+    # print(provider_data)
+    # 2. Package the "Config Context" for the tools
+    run_context = AgentContext(
+        db=db,
+        patient_id=body.patient_id,
+        provider_id=body.provider_id,
+        cpt_codes=body.cpt_codes,
+        icd10_codes=body.icd10_codes,
+        clinical_summary=body.clinical_summary,
+        specialty_taxonomy_codes=body.specialty_taxonomy_codes,
+        # provider_data=provider_data
+    )
+
+    # 3. Run the Agent
+    result = await Runner.run(
+        starting_agent=provider_agent,
+        input=f"""
+        Evaluate this provider match:
+        - Patient Clinical Summary: {body.clinical_summary}
+        - Patient Insurance: {body.insurance}
+        - Provider Data: {provider_data}
+        """,
+        context=run_context
+    )
+    
+    return result.final_output
 
 
 

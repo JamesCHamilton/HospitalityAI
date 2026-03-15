@@ -14,3 +14,7 @@ node_modules/
 .ethicos/
 /ethicos
 
+migrations/
+migrations/**
+alembic.ini
+# do not remove ANY of these

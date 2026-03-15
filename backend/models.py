@@ -90,10 +90,10 @@ class Patient(Base):
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
     clinical_history = Column(String)
-    insurance_id = Column(String, ForeignKey("insurance.insurance_id"))
+    # insurance_id = Column(String, ForeignKey("insurance.insurance_id"))
     
     # Relationships
-    insurance = relationship("Insurance", backref="patients")
+    # insurance = relationship("Insurance", backref="patients")
     claims = relationship("Claim", back_populates="patient")
 
 
@@ -101,10 +101,12 @@ from sqlalchemy.sql import func
 
 class Claim(Base):
     __tablename__ = "claims"
-    claim_id = Column(String, primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"))
     provider_npi = Column(String, ForeignKey("providers.npi"))
-    description = Column(String)
+    clinical_description = Column(String)
+    status_reasoning = Column(String)
+    cpt_codes = Column(JSONB)  # List of ICD-10 or other codes
     diagnosis_codes = Column(JSONB)  # List of ICD-10 or other codes
     status = Column(String)  # e.g., "approved", "denied", "in progress", etc.
     created_at = Column(
