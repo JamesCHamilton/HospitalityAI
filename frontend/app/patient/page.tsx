@@ -39,9 +39,9 @@ export default function PatientPage() {
     if (selectedFile) data.append('referral_pdf', selectedFile);
 
     try {
-      const ingestRes = await fetch('http://localhost:8081/api/ingest', { method: 'POST', body: data });
-      const ingestData = await ingestRes.json();
-      setExtractedContext(ingestData.extracted?.clinical_reason || formData.history);
+      // const ingestRes = await fetch('http://localhost:8081/api/ingest', { method: 'POST', body: data });
+      // const ingestData = await ingestRes.json();
+      // setExtractedContext(ingestData.extracted?.clinical_reason || formData.history);
       setStep(2); // Move to Refinement
     } catch (err) {
       console.error("Ingestion failed", err);
@@ -54,23 +54,39 @@ export default function PatientPage() {
   const getFinalMatches = async () => {
     setLoading(true);
     try {
-      const matchRes = await fetch('http://localhost:8080/api/match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          patientContext: extractedContext,
-          filters: filters
+      // Use the FastAPI /match_providers endpoint instead of old /api/match
+      const formPayload = new FormData();
+      if (selectedFile) formPayload.append("file", selectedFile);
+      // Pass patient + context info as supplemental JSON (stringified)
+      formPayload.append(
+        "json_data",
+        JSON.stringify({
+          patient_name: formData.name,
+          clinical_history: extractedContext || formData.history,
+          insurance_id: formData.insurance,
+          zipcode: filters.zipcode,
+          specialization: filters.specialization,
+          sex: filters.sex,
+          max_wait_days: filters.max_wait_days,
         })
+      );
+      const matchRes = await fetch("http://localhost:8000/match_providers", {
+        method: "POST",
+        body: formPayload,
       });
       const matchData = await matchRes.json();
-      setMatches(matchData.matches || []);
+      setMatches(matchData.top_matches || []);
       setStep(3);
     } catch (err) {
       console.error("Match failed", err);
+      alert("Matching service failed.");
     } finally {
       setLoading(false);
     }
   };
+
+
+  
 
   return (
     <div className="max-w-2xl mx-auto py-10 px-4">
@@ -257,40 +273,126 @@ export default function PatientPage() {
       )}
 
       {/* Step 3: Match Results */}
-      {step === 3 && matches[idx] && (
+      {step === 3 && matches && (
         <div className="relative animate-in fade-in slide-in-from-bottom-8 duration-500">
-          <div className="bg-white rounded-[40px] shadow-2xl overflow-hidden border border-gray-100 p-10">
-            {/* Same match card logic as before */}
+          {/* Criteria Summary Section */}
+          <div className="mb-8">
+            <div className="flex items-center gap-2 mb-2">
+              <FileText className="w-5 h-5 text-purple-500" />
+              <span className="text-[11px] font-black text-purple-700 uppercase tracking-widest">
+                Reasoning Criteria
+              </span>
+            </div>
+            <div className="bg-purple-50 p-4 rounded-2xl border border-purple-100 text-sm font-medium text-purple-900 shadow">
+              {/** If the backend provides llm_criteria_summary, display it; fallback above sample for demo */}
+              {matches.llm_criteria_summary ||
+                "Providers were selected based on their acceptance of Aetna EPO Gold insurance and their relevance to cardiology, with preference given to those specializing in cardiovascular disease due to the patient's suspected Coronary Artery Disease. Internal Medicine specialists were considered for their potential to manage related conditions (hypertension and diabetes)."}
+            </div>
+          </div>
+
+          {/* Patient Clinical Summary Card */}
+          <div className="mb-6 flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <HeartPulse className="h-5 w-5 text-red-500" />
+              <span className="uppercase text-[11px] font-black text-gray-500 tracking-widest">
+                Clinical Summary
+              </span>
+            </div>
+            <div className="bg-red-50/60 border border-red-100 p-5 rounded-2xl text-sm text-gray-700 font-medium">
+              {matches.patient_summary?.clinical_summary?.value || (
+                <>Patient John Doe presents with intermittent substernal chest pain (7/10) radiating to the left jaw over the past 48 hours. Medical history includes hypertension (managed with Lisinopril) and type II diabetes. An in-office EKG showed minor ST-segment depression. The patient is stable but is being referred to Cardiology for immediate evaluation of suspected Coronary Artery Disease, with a request for a stress test and possible imaging.</>
+              )}
+            </div>
+          </div>
+
+          {/* Card for current match */}
+          <div className="bg-white rounded-[40px] shadow-2xl overflow-hidden border border-gray-100 p-10 mb-4">
             <div className="flex justify-between items-start mb-8">
               <div>
-                <h3 className="text-4xl font-black text-gray-900 tracking-tighter leading-none mb-2">{matches[idx].full_name}</h3>
-                <div className="flex items-center gap-4">
-                  <p className="text-blue-600 font-bold text-sm bg-blue-50 px-3 py-1 rounded-lg">NPI: {matches[idx].npi}</p>
-                  <p className="flex items-center text-gray-400 text-xs font-bold uppercase tracking-widest"><MapPin className="h-3 w-3 mr-1" /> NYC</p>
+                <h3 className="text-3xl md:text-4xl font-black text-gray-900 tracking-tighter leading-none mb-2">
+                  {matches[idx].provider_name}
+                </h3>
+                <div className="flex items-center gap-4 flex-wrap">
+                  <span className="text-blue-600 font-bold text-sm bg-blue-50 px-3 py-1 rounded-lg flex items-center gap-1">
+                    <span className="font-mono">NPI:</span> {matches[idx].npi}
+                  </span>
+                  <span className="flex items-center text-gray-400 text-xs font-bold uppercase tracking-widest gap-1">
+                    <Building className="h-3 w-3 mr-1" /> NYC
+                  </span>
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-5xl font-black text-green-500 leading-none">{matches[idx].match_score}%</div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">Match Quality</p>
+                <div className="text-5xl font-black text-green-500 leading-none">
+                  {/* Show as percent, rounded */}
+                  {Math.round((matches[idx].match_score ?? 0) * 100)}%
+                </div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">
+                  Match Quality
+                </p>
               </div>
             </div>
+
+            <div className="mb-6">
+              <div className="flex flex-wrap gap-2 mb-2">
+                {matches[idx].specialty_taxonomies?.map((tax, i) => (
+                  <span key={tax+i} className="bg-purple-100 text-purple-700 text-xs px-2 py-1 rounded font-bold flex items-center gap-1">
+                    <ShieldCheck className="h-3 w-3" />
+                    {tax}
+                  </span>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {matches[idx].insurances?.map((insurance, i) => (
+                  <span key={insurance+i} className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded font-bold flex items-center gap-1">
+                    <ShieldCheck className="h-3 w-3" /> {insurance}
+                  </span>
+                ))}
+              </div>
+            </div>
+
             <div className="space-y-6 mb-10">
               <div className="bg-blue-50/50 p-6 rounded-3xl border border-blue-100">
-                <h4 className="text-[10px] font-black text-blue-700 uppercase tracking-widest mb-3 flex items-center"><ShieldCheck className="h-4 w-4 mr-2" /> Clinical Justification</h4>
-                <p className="text-sm text-gray-700 leading-relaxed font-medium">{matches[idx].medical_indications_justification}</p>
+                <h4 className="text-[10px] font-black text-blue-700 uppercase tracking-widest mb-3 flex items-center">
+                  <FileText className="h-4 w-4 mr-2" /> Reason for Match
+                </h4>
+                <p className="text-sm text-gray-700 leading-relaxed font-medium">
+                  {matches[idx].reason}
+                </p>
               </div>
             </div>
             <div className="flex gap-4">
-              <button onClick={() => setIdx((idx + 1) % matches.length)} className="flex-1 py-5 border-2 border-gray-100 rounded-3xl flex justify-center items-center hover:bg-red-50 transition-all group">
+              <button
+                type="button"
+                onClick={() => setIdx((idx + 1) % matches.length)}
+                className="flex-1 py-5 border-2 border-gray-100 rounded-3xl flex justify-center items-center hover:bg-red-50 transition-all group"
+              >
                 <XCircle className="text-gray-300 group-hover:text-red-500 h-10 w-10 transition-colors" />
               </button>
-              <button onClick={() => alert("Handoff Initiated!")} className="flex-[2] py-5 bg-blue-600 text-white rounded-3xl flex justify-center items-center hover:bg-blue-700 transition-all shadow-2xl font-black text-xl gap-3">
+              <button
+                type="button"
+                onClick={() => alert('Handoff Initiated!')}
+                className="flex-[2] py-5 bg-blue-600 text-white rounded-3xl flex justify-center items-center hover:bg-blue-700 transition-all shadow-2xl font-black text-xl gap-3"
+              >
                 <CheckCircle className="h-8 w-8" /> Select Provider
               </button>
             </div>
           </div>
+
+          {/* Optionally, show navigation dots for matches */}
+          <div className="flex items-center justify-center gap-2 mt-4">
+            {matches.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setIdx(i)}
+                className={`w-3 h-3 rounded-full border ${i === idx ? 'bg-purple-600 border-purple-600' : 'bg-gray-200 border-gray-300'} transition-all`}
+                aria-label={`Provider match ${i + 1}`}
+                tabIndex={0}
+              />
+            ))}
+          </div>
         </div>
       )}
+      
     </div>
   );
 }
