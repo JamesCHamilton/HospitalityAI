@@ -5,7 +5,7 @@ import { Upload, CheckCircle, XCircle, Activity, ShieldCheck, MapPin, ArrowRight
 export default function PatientPage() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  
+
   // Unified Form State
   const [formData, setFormData] = useState({
     name: "",
@@ -21,7 +21,7 @@ export default function PatientPage() {
   const handleWorkflowSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
+
     const data = new FormData();
     data.append('patient_name', formData.name);
     data.append('clinical_history', formData.history);
@@ -38,7 +38,7 @@ export default function PatientPage() {
       const matchRes = await fetch('http://localhost:8080/api/match', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           patientContext,
           filters: { insurance: formData.insurance } // Pass basic context
         })
@@ -66,10 +66,6 @@ export default function PatientPage() {
           patientPlanId: formData.insurance,
           providerNpi: provider.npi
         })
-      );
-      const matchRes = await fetch("http://localhost:8000/match_providers", {
-        method: "POST",
-        body: formPayload,
       });
       const data = await res.json();
       setHandoffResult(data);
@@ -80,9 +76,6 @@ export default function PatientPage() {
       setLoading(false);
     }
   };
-
-
-  
 
   return (
     <div className="max-w-2xl mx-auto py-10 px-4">
@@ -97,20 +90,20 @@ export default function PatientPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 ml-2">Full Name</label>
-                <input 
+                <input
                   type="text" required
                   className="w-full px-6 py-4 bg-gray-50 rounded-2xl border-2 border-gray-50 focus:border-blue-500 focus:bg-white outline-none font-bold text-gray-800 transition-all shadow-sm"
                   placeholder="e.g. John Doe"
                   value={formData.name}
-                  onChange={e => setFormData({...formData, name: e.target.value})}
+                  onChange={e => setFormData({ ...formData, name: e.target.value })}
                 />
               </div>
               <div>
                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 ml-2">Insurance</label>
-                <select 
+                <select
                   className="w-full px-6 py-4 bg-gray-50 rounded-2xl border-2 border-gray-50 focus:border-blue-500 focus:bg-white outline-none font-bold text-gray-800 transition-all cursor-pointer shadow-sm"
                   value={formData.insurance}
-                  onChange={e => setFormData({...formData, insurance: e.target.value})}
+                  onChange={e => setFormData({ ...formData, insurance: e.target.value })}
                 >
                   <option value="FAKE_BCBS_HMO_001">BlueCross HMO Silver</option>
                   <option value="FAKE_UNITED_PPO_002">United PPO Platinum</option>
@@ -128,21 +121,21 @@ export default function PatientPage() {
 
             <div>
               <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 ml-2">Clinical Context</label>
-              <textarea 
+              <textarea
                 required
                 className="w-full px-6 py-4 bg-gray-50 rounded-2xl border-2 border-gray-50 focus:border-blue-500 focus:bg-white outline-none font-medium text-gray-700 h-32 transition-all shadow-sm"
                 placeholder="Describe symptoms or reason for consult..."
                 value={formData.history}
-                onChange={e => setFormData({...formData, history: e.target.value})}
+                onChange={e => setFormData({ ...formData, history: e.target.value })}
               />
             </div>
 
             <div className="relative">
-              <input 
-                type="file" ref={fileInputRef} className="hidden" accept=".pdf" 
-                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} 
+              <input
+                type="file" ref={fileInputRef} className="hidden" accept=".pdf"
+                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
               />
-              <div 
+              <div
                 className={`w-full py-6 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center transition-all group ${
                   selectedFile ? 'border-green-200 bg-green-50' : 'border-gray-100 bg-gray-50 hover:border-blue-200 hover:bg-blue-50/30 cursor-pointer'
                 }`}
@@ -169,7 +162,7 @@ export default function PatientPage() {
               </div>
             </div>
 
-            <button 
+            <button
               type="submit" disabled={loading}
               className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black text-xl hover:bg-blue-700 transition-all shadow-xl shadow-blue-200 flex items-center justify-center gap-3 disabled:bg-blue-300"
             >
@@ -184,7 +177,7 @@ export default function PatientPage() {
           <div className="bg-white rounded-[40px] shadow-2xl overflow-hidden border border-gray-100 p-10">
             <div className="flex justify-between items-start mb-8">
               <div>
-                <h3 className="text-4xl font-black text-gray-900 tracking-tighter leading-none mb-2">{matches[idx].full_name || matches[idx].provider_name}</h3>
+                <h3 className="text-4xl font-black text-gray-900 tracking-tighter leading-none mb-2">{matches[idx].first_name +' '+matches[idx].last_name}</h3>
                 <div className="flex items-center gap-4">
                   <p className="text-blue-600 font-bold text-sm bg-blue-50 px-3 py-1 rounded-lg">NPI: {matches[idx].npi}</p>
                   <p className="flex items-center text-gray-400 text-xs font-bold uppercase tracking-widest"><MapPin className="h-3 w-3 mr-1" /> New York, NY</p>

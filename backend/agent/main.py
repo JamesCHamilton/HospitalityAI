@@ -28,7 +28,7 @@ app = FastAPI(title="HospitalityAI Reasoning Engine")
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*", "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -170,38 +170,6 @@ from config.db import get_db
 
 
 
-@app.get("/pending")
-def get_pending_claims(db: Session = Depends(get_db)):
-    """
-    Get the claims queue sorted by priority_score descending.
-    Result includes claim id, provider id, priority score, status, plus optionally claim/ provider details.
-    """
-    # Join ClaimQueue with Claim so that we get data from both in each row ("like a view")
-    pending = (
-        db.query(ClaimQueue, Claim)
-        .join(Claim, ClaimQueue.claim_id == Claim.id)
-        .order_by(ClaimQueue.priority_score.desc())
-        .all()
-    )
-    result = []
-    for cq in pending:
-        result.append({
-            "queue_id": cq.id,
-            "claim_id": cq.claim_id,
-            "provider_id": cq.provider_id,
-            "priority_score": cq.priority_score,
-            "status": cq.status,
-            # Optional: Uncomment the lines below to show some details about claim/provider
-            # "claim": {
-            #     "description": cq.claim.description if cq.claim else None,
-            #     "diagnosis_codes": cq.claim.diagnosis_codes if cq.claim else None,
-            # },
-            # "provider": {
-            #     "provider_name": cq.provider.provider_name if cq.provider else None,
-            # }
-        })
-    return result
-
 @app.get("/claims")
 def get_claims_with_details(status: str = "pending", db: Session = Depends(get_db)):
     """
@@ -316,7 +284,13 @@ def get_claims_by_patient(
     Optionally filtered by status.
     """
     from models import Provider  # Local import in case Provider isn't already imported
-    query = db.query(Claim, Provider).join(Provider, Claim.provider_npi == Provider.npi).filter(Claim.patient_id == patient_id)
+    from sqlalchemy.orm import joinedload
+    query = (
+        db.query(Claim, Provider)
+        .join(Provider, Claim.provider_npi == Provider.npi)
+        .options(joinedload(Claim.provider).joinedload(Provider.insurances))
+        .filter(Claim.patient_id == patient_id)
+    )
     if status:
         query = query.filter(Claim.status == status)
     records = query.all()
@@ -327,9 +301,13 @@ def get_claims_by_patient(
             "claim_id": claim.id,
             "patient_id": claim.patient_id,
             "provider_npi": claim.provider_npi,
-            "description": claim.description,
             "diagnosis_codes": claim.diagnosis_codes,
             "status": claim.status,
+            "status_reasoning": getattr(claim, "status_reasoning", None),
+            "cpt_codes": getattr(claim, "cpt_codes", None),
+            "created_at": getattr(claim, "created_at", None),
+            "updated_at": getattr(claim, "updated_at", None),
+            "priority_score": getattr(claim, "priority_score", None),
             "provider": {
                 "npi": provider.npi,
                 "provider_name": provider.provider_name,
@@ -343,6 +321,15 @@ def get_claims_by_patient(
                 "official_website": provider.official_website,
                 "data_discrepancy_flag": provider.data_discrepancy_flag,
                 "import_id": provider.import_id,
+                "insurances": [
+                    {
+                        "insurance_id": ins.insurance_id,
+                        "insurance_name": getattr(ins, "insurance_name", None),
+                        "insurer": getattr(ins, "insurer", None),
+                        "plan_type": getattr(ins, "plan_type", None)
+                    }
+                    for ins in getattr(provider, "insurances", []) or []
+                ],
             },
         }
         results.append(claim_dict)
@@ -355,42 +342,118 @@ from models import Claim
 from config.db import get_db
 
 
-@app.post("/claims/{claim_id}/approve")
-def approve_claim(
-    claim_id: str = Path(..., description="The ID of the claim to approve"),
+@app.post("/claims/{claim_id}/decision")
+def claim_decision(
+    claim_id: str = Path(..., description="The ID of the claim to update"),
+    status: str = Body(..., description="Status to set: 'approved' or 'denied'"),
+    status_reasoning: str = Body(..., description="Required detailed reasoning for this decision"),
     db: Session = Depends(get_db)
 ):
     """
-    Set the status of a claim to 'approved'.
+    Approve or deny a claim. Must provide a status ('approved' or 'denied') and a status_reasoning string.
     """
+    if status not in ["approved", "denied"]:
+        raise HTTPException(status_code=400, detail="Status must be 'approved' or 'denied'.")
+
     claim = db.query(Claim).filter_by(claim_id=claim_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
-    claim.status = "approved"
+
+    claim.status = status
+    claim.status_reasoning = status_reasoning
     db.commit()
     db.refresh(claim)
-    return {"claim_id": claim.id, "status": claim.status}
+    return {
+        "claim_id": claim.id,
+        "status": claim.status,
+        "status_reasoning": claim.status_reasoning
+    }
 
+from fastapi import Path
 
-@app.post("/claims/{claim_id}/disapprove")
-def disapprove_claim(
-    claim_id: str = Path(..., description="The ID of the claim to disapprove"),
-    reason: str = Body(None, description="Optional reason for disapproval"),
+@app.get("/patient/{patient_id}")
+def get_patient_by_id(
+    patient_id: str = Path(..., description="Patient ID"),
     db: Session = Depends(get_db)
 ):
     """
-    Set the status of a claim to 'denied' (disapproved).
+    Get detailed information about a patient by patient ID.
     """
-    claim = db.query(Claim).filter_by(claim_id=claim_id).first()
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found")
-    claim.status = "denied"
-    if reason:
-        claim.description = (claim.description or "") + f"\nDenial reason: {reason}"
-    db.commit()
-    db.refresh(claim)
-    return {"claim_id": claim.id, "status": claim.status, "denial_reason": reason}
+    from models import Patient  # Local import in case Patient isn't already imported
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not patient:
+        return {"error": "Patient not found"}
 
+    # Return relevant patient fields (customize as needed)
+    patient_data = {
+        "id": patient.id,
+        "full_name": patient.full_name if hasattr(patient, "full_name") else getattr(patient, "name", ""),
+        "date_of_birth": patient.date_of_birth if hasattr(patient, "date_of_birth") else "",
+        "clinical_history": patient.clinical_history if hasattr(patient, "clinical_history") else "",
+        "gender": patient.gender if hasattr(patient, "gender") else "",
+        "insurance_id": patient.insurance_id if hasattr(patient, "insurance_id") else "",
+        "address": patient.address if hasattr(patient, "address") else "",
+        "phone": patient.phone if hasattr(patient, "phone") else "",
+        "first_name": patient.first_name,
+        "last_name": patient.last_name,
+        # Add/edit keys as needed according to your model
+    }
+    return patient_data
+
+@app.get("/provider/{provider_id}")
+def get_provider_by_id(
+    provider_id: str = Path(..., description="Provider NPI"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get detailed information about a provider by provider NPI/ID,
+    including insurances and specialty taxonomies.
+    """
+    from models import Provider  # Local import in case Provider isn't already imported
+    provider = db.query(Provider).filter(Provider.npi == provider_id).options(
+        joinedload(Provider.insurances),
+        joinedload(Provider.specialty_taxonomies)
+    ).first()
+    if not provider:
+        return {"error": "Provider not found"}
+
+    provider_data = {
+        "npi": provider.npi,
+        "provider_name": provider.provider_name,
+        "address": provider.address,
+        "zip_code": provider.zip_code,
+        "latitude": provider.latitude,
+        "longitude": provider.longitude,
+        "wait_time_days": provider.wait_time_days,
+        "years_experience": provider.years_experience,
+        "clinic_size": provider.clinic_size,
+        "official_website": provider.official_website,
+        "data_discrepancy_flag": provider.data_discrepancy_flag,
+        "insurances": [
+            {
+                "insurance_id": ins.insurance_id,
+                "insurance_name": ins.insurance_name,
+                "insurer": ins.insurer,
+                "plan_type": ins.plan_type,
+                "network_size": ins.network_size,
+                "covered_specialties": ins.covered_specialties,
+                "general_covered_icd10": ins.general_covered_icd10,
+                "general_covered_cpt": ins.general_covered_cpt,
+            }
+            for ins in provider.insurances
+        ],
+        "specialty_taxonomies": [
+            {
+                "taxonomy_code": tax.taxonomy_code,
+                "medicare_specialty_code": tax.medicare_specialty_code,
+                "provider_type_description": tax.provider_type_description,
+                "taxonomy_type": tax.taxonomy_type,
+                "import_id": tax.import_id,
+            }
+            for tax in provider.specialty_taxonomies
+        ],
+    }
+    return provider_data
 
 
 from fastapi import File, UploadFile, Form
@@ -453,6 +516,11 @@ def unsoiled_extract_summary(file_path: Optional[str], json_data: dict) -> dict:
         "icd10_codes": result.result.get("icd10_codes", []),
         "specialty_taxonomy_codes": result.result.get("specialty_taxonomy_codes", [])
     }
+
+
+
+
+
 
 
 @app.post("/match_providers")
