@@ -1,0 +1,94 @@
+HOSPITALITY AI - PITCH DECK OUTLINE
+"Closing the 20-Day Referral Gap with Clinical Intelligence"
+
+---
+
+SLIDE 1: THE HOOK (Title Slide)
+- Subject: HospitalityAI / EthicOS
+- Subtitle: The End-to-End Orchestration Engine for Frictionless Referrals.
+- Visual Idea: A clean, white medical interface showing a "Referral Authorized" checkmark.
+- Content: Eliminating the administrative friction that delays patient care.
+
+---
+
+SLIDE 2: THE PROBLEM (The Pain Point)
+- Subject: The 20-Day Referral Black Hole.
+- Content:
+    * It takes an average of 20 days for a specialist referral to be authorized.
+    * $1 Trillion in annual administrative waste in the US Healthcare system.
+    * Process relies on manual faxes, outdated registries, and phone tag.
+- Key Message: "Delayed care is denied care."
+
+---
+
+SLIDE 3: THE SOLUTION (The Product)
+- Subject: HospitalityAI
+- Content:
+    * An automated pipeline that handles Intake, Matching, and Adjudication in seconds.
+    * 1. AI Intake: Unsiloed AI parses messy PDFs into structured context.
+    * 2. High-Fidelity Matching: Enriched provider data (Crustdata + NPI) for "Best Fit" results.
+    * 3. Instant Authorization: AI Rules Engine auto-adjudicates claims based on clinical reality.
+
+---
+
+SLIDE 4: HOW IT WORKS (The Ingestion Layer)
+- Subject: Beyond Simple OCR.
+- Content:
+    * We don't just read text; we extract clinical intent from clinical pdfs and client forms.
+    * Using Unsiloed AI to transform unstructured fax documents into machine-readable JSON schemas.
+    * Captures: Symptoms, Insurance, and Urgency.
+
+---
+
+SLIDE 5: OUR SECRET SAUCE (Data Enrichment)
+- Subject: The Union of Two (The Source of Truth).
+- Content:
+    * Static registries (NPI) are often years out of date.
+    * We join Federal Data with NYC Hospital Metadata + up to date NPI api-endpoints.
+    * Result: We know not just where a doctor is, how they relate to what the patient needs.
+
+---
+
+SLIDE 6: THE REASONING ENGINE (AI Adjudicator)
+- Subject: Clinical Logic at Scale.
+- Content:
+    * Built-in Rules Engine for:
+        1. Network Adequacy (In-network verification).
+        2. Step Therapy (Ensuring conservative treatments were tried first).
+        3. Medical Necessity (AI triage based on Red Flag keywords).
+    * Decision Logic: Confidence-based routing (Auto-Approve vs. Manual Review).
+
+---
+
+SLIDE 7: REAL-TIME OBSERVABILITY (The Dashboard)
+- Subject: Millisecond Adjudication.
+- Content:
+    * Powered by Supabase Realtime.
+    * Insurance providers see incoming claims appear and adjudicate live without page refreshes.
+    * Dual-Output Strategy: FHIR JSON for the future, e-Fax Fallback for the legacy present.
+
+---
+
+SLIDE 8: THE IMPACT (Business Case)
+- Subject: Efficiency for All Personas.
+- Content:
+    * Patients: Instant specialist booking and insurance certainty.
+    * Providers: Clean, EHR-ready clinical briefs via FHIR.
+    * Payers: Drastic reduction in manual review volume and administrative overhead.
+
+---
+
+SLIDE 9: FUTURE ROADMAP
+- Subject: Scaling the Bridge.
+- Content:
+    * Direct Scheduling Integration (Zocdoc/MyChart API).
+    * Multi-Payer Rulebook expansion.
+    * Predictive Capacity Management (Predicting wait times before they happen).
+    * reinforcecment model that learns each time it miss accepts/denys a claim.
+
+---
+
+SLIDE 10: THE ASK / FINAL THOUGHT
+- Subject: Make Healthcare Frictionless.
+- Content: HospitalityAI is the infrastructure needed to turn "weeks of waiting" into "seconds of matching."
+- Closing: "Let's fix the referral gap together."
