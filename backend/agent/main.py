@@ -14,7 +14,7 @@ load_dotenv()
 
 from unsiloed_sdk import UnsiloedClient
 
-
+#Future bonus, if claim that the agent marked as auto approved or denied is reopened then the feed that back into ai with reason why its decision was wrong and if claim is closed then feed into AI saying it did good job.
 app = FastAPI(title="HospitalityAI Reasoning Engine")
 
 # CORS
